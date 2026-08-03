@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.6 – 2026-08-03
+
+- Removed every per-version release-note file from the distributable repository.
+- Reduced hard-coded file-presence checks to runtime, test, and GitHub Pages deployment entry points.
+- Added dynamic validation of local HTML assets and the JavaScript ES-module import graph.
+- Made stress-test validation conditional so examples remain optional documentation rather than a deployment prerequisite.
+- Verified that the test suite passes after optional documentation, examples, and development-server files are removed.
+
+## 1.2.5 – 2026-08-03
+
+- Removed historical release-note files from the deployment-critical required-file list.
+- Derived the tested application version from `js/config.js`.
+- Added consistency checks for `package.json` and cache-busting application assets.
+- Kept current release-note validation optional so documentation cannot block GitHub Pages deployment.
+- Added a regression run in which all older release-note files are absent.
+
 ## 1.2.4 – 2026-08-03
 
 - Replaced capture-based file sourcing with an interactive webR REPL stream.

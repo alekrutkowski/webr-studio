@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.2.4';
+export const APP_VERSION = '1.2.6';
 export const WEBR_VERSION = '0.6.0';
 export const WEBR_MODULE_URL = `https://webr.r-wasm.org/v${WEBR_VERSION}/webr.mjs`;
 export const MAX_FILE_BYTES = 100 * 1024 * 1024;

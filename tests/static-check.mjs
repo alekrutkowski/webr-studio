@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -47,16 +47,41 @@ for (const reference of localReferences) {
   assert.ok(existsSync(join(root, reference)), `Missing local asset referenced by markup: ${reference}`);
 }
 
+// Keep the hard-coded presence list deliberately minimal. Files referenced by
+// index.html, the web manifest, or JavaScript imports are verified dynamically,
+// so optional documentation and examples never gate deployment.
 for (const required of [
-  '.nojekyll', '404.html', 'LICENSE', 'README.md', 'CHANGELOG.md', 'FIX-REPORT.md',
-  'manifest.webmanifest', 'serve.py', 'RELEASE-NOTES-1.2.0.md', 'RELEASE-NOTES-1.2.1.md', 'RELEASE-NOTES-1.2.2.md', 'RELEASE-NOTES-1.2.3.md', 'RELEASE-NOTES-1.2.4.md', 'examples/webr_ide_stress_test.R',
-  '.github/workflows/pages.yml', 'js/app.js', 'js/editor.js', 'js/console.js', 'js/webr-engine.js'
+  'index.html', 'package.json', '.github/workflows/pages.yml',
+  'tests/unit-check.mjs', '.nojekyll', '404.html'
 ]) {
   assert.ok(existsSync(join(root, required)), `Required project file is missing: ${required}`);
 }
 
+// Verify local ES-module dependencies without maintaining a second hard-coded
+// inventory of implementation files.
+for (const file of jsFiles) {
+  const source = readFileSync(file, 'utf8');
+  const specifiers = [
+    ...source.matchAll(/(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"](\.[^'"]+)['"]/g),
+    ...source.matchAll(/import\(\s*['"](\.[^'"]+)['"]\s*\)/g)
+  ].map(match => match[1].split(/[?#]/, 1)[0]);
+
+  for (const specifier of specifiers) {
+    const dependency = resolve(dirname(file), specifier);
+    assert.ok(
+      existsSync(dependency),
+      `Missing local module imported by ${relative(root, file)}: ${specifier}`
+    );
+  }
+}
+
 const config = read('js/config.js');
-assert.match(config, /APP_VERSION\s*=\s*['"]1\.2\.4['"]/, 'The release should identify itself as 1.2.4');
+const versionMatch = config.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+assert.ok(versionMatch, 'js/config.js must declare APP_VERSION.');
+const appVersion = versionMatch[1];
+const packageMetadata = JSON.parse(read('package.json'));
+assert.equal(packageMetadata.version, appVersion, 'package.json and APP_VERSION must agree.');
+
 assert.match(config, /WEBR_VERSION\s*=\s*['"]0\.6\.0['"]/, 'webR should be pinned to 0.6.0');
 assert.match(html, /ace-builds@1\.44\.0/, 'Ace should be pinned to 1.44.0');
 assert.match(html, /marked@18\.0\.7\/lib\/marked\.umd\.js/, 'Marked should use its published UMD browser bundle.');
@@ -150,7 +175,9 @@ assert.doesNotMatch(styles, /^svg\s*\{/m, 'Generic SVG rules must not override R
 assert.match(styles, /\.ui-icon\s*\{/, 'Application icon styling must be explicitly scoped.');
 assert.match(styles, /\.r-plot-svg\s*\{[^}]*fill:\s*#000[^}]*stroke:\s*none/s, 'R plot SVGs need a paint reset independent of UI icon rules.');
 assert.match(read('js/utils.js'), /ADD_TAGS:\s*\['style', 'symbol', 'use'\]/, 'SVG sanitization must preserve glyph symbols and use elements.');
-assert.match(html, /styles\.css\?v=1\.2\.4/, 'Release assets should be cache-busted after the sourcing, help, and R Markdown corrections.');
+const escapedAssetVersion = appVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+assert.match(html, new RegExp(`styles\\.css\\?v=${escapedAssetVersion}`), 'The stylesheet must use the current cache-busting version.');
+assert.match(html, new RegExp(`js/app\\.js\\?v=${escapedAssetVersion}`), 'The application module must use the current cache-busting version.');
 assert.match(styles, /grid-template-columns:\s*14px[^;]+/s, 'List tree rows need a dedicated disclosure column for alignment.');
 assert.match(styles, /\.plot-viewer \.plot-frame img[^}]*width:\s*100%[^}]*height:\s*100%[^}]*object-fit:\s*contain/s, 'Plots must fill and reflow within the active viewer.');
 assert.match(appSource, /this\.editor\.deactivate\(\)/, 'Closing or deleting the last file must deactivate the editor session.');
@@ -161,18 +188,17 @@ assert.match(appSource, /const result = await this\.engine\.execute\(source\);[\
 assert.match(engineSource, /replayLastPlot\(\)/, 'The latest recorded plot must support responsive replay.');
 assert.match(appSource, /#encoding-button/, 'The encoding control must be wired.');
 assert.match(appSource, /#indent-mode-button/, 'The indentation control must be wired.');
-assert.doesNotMatch(read('examples/webr_ide_stress_test.R'), /%,d/, 'The stress test must not use unsupported R sprintf grouping flags.');
-assert.doesNotMatch(read('examples/webr_ide_stress_test.R'), /col\s*=\s*\\?["']crimson\\?["']/i, 'The stress test must not contain the unsupported R colour name.');
-assert.match(read('examples/webr_ide_stress_test.R'), /if \(is\.null\(value\)\) return\(invisible\(NULL\)\)/, 'The timing helper must return invisible NULL for side-effect functions.');
-assert.match(read('examples/webr_ide_stress_test.R'), /Inline R result: `r 2 \+ 2`/, 'The stress report should exercise inline R Markdown evaluation.');
-assert.match(read('examples/webr_ide_stress_test.R'), /\[stream\] source heartbeat %d\/4/, 'The stress test must visibly exercise line-by-line source streaming.');
+const stressScriptPath = 'examples/webr_ide_stress_test.R';
+if (existsSync(join(root, stressScriptPath))) {
+  const stressScript = read(stressScriptPath);
+  assert.doesNotMatch(stressScript, /%,d/, 'The stress test must not use unsupported R sprintf grouping flags.');
+  assert.doesNotMatch(stressScript, /col\s*=\s*\\?["']crimson\\?["']/i, 'The stress test must not contain the unsupported R colour name.');
+  assert.match(stressScript, /if \(is\.null\(value\)\) return\(invisible\(NULL\)\)/, 'The timing helper must suppress visible NULL results from side-effect functions.');
+  assert.match(stressScript, /Inline R result: `r 2 \+ 2`/, 'The stress report should exercise inline R Markdown evaluation.');
+  assert.match(stressScript, /\[stream\] source heartbeat %d\/4/, 'The stress test must visibly exercise line-by-line source streaming.');
+  assert.match(stressScript, /user_calls <- calls\[grepl\("\^trace_level_\[123\]/, 'The stress-test traceback fixture must filter out webR wrapper frames.');
+}
 
-const stressScript = read('examples/webr_ide_stress_test.R');
-assert.match(stressScript, /if \(is\.null\(value\)\) return\(invisible\(NULL\)\)/, 'The timing helper must suppress visible NULL results from write.csv and write.table.');
-assert.doesNotMatch(stressScript, /col\s*=\s*["']crimson["']/, 'The stress test must use R-valid colour specifications.');
-assert.doesNotMatch(stressScript, /%,d/, 'The stress test must not use unsupported comma printf formatting.');
-assert.match(stressScript, /Inline R result: `r 2 \+ 2`/, 'The stress report should exercise inline R rendering.');
-assert.match(stressScript, /user_calls <- calls\[grepl\("\^trace_level_\[123\]/, 'The stress-test traceback fixture must filter out webR wrapper frames.');
 
 const allText = walk(root)
   .filter(path => !path.includes(`${join(root, '.git')}`))

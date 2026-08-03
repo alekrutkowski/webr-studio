@@ -728,7 +728,7 @@ body.has-maximized-pane .resizer { pointer-events: none; }
 .prose .inline-r-error { display: inline; padding: 0 .2em; border-radius: 3px; color: var(--danger); background: var(--danger-soft); font: .92em var(--code-font); }
 
 /* 1.2.3 source controls, R Markdown figure sizing, and help code */
-/* 1.2.4 adds streamed source output through the existing console cards. */
+/* Streamed source output uses the existing console-card presentation. */
 .split-button { display: inline-flex; align-items: stretch; }
 .split-button > .button { border-radius: 0; }
 .split-button > .button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
