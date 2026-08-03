@@ -2,6 +2,8 @@
 
 A fast, browser-native R IDE for [webR](https://docs.r-wasm.org/webr/latest/), designed for direct deployment to GitHub Pages.
 
+### You can use it at https://alekrutkowski.github.io/webr-studio/
+
 The interface follows the visual system and interaction conventions popularised by [shadcn/ui](https://ui.shadcn.com/): neutral design tokens, compact toolbars, consistent controls, accessible focus states, restrained elevation, and first-class light and dark themes. It is implemented as a dependency-light static application rather than a generated React bundle, which keeps startup and GitHub Pages deployment simple.
 
 Made with GPT-5.6-Sol-Pro.
