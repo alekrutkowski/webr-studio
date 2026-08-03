@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opening webR Studio</title>
+  <script>
+    (() => {
+      const parts = location.pathname.split('/').filter(Boolean);
+      const projectBase = location.hostname.endsWith('.github.io') && parts.length ? `/${parts[0]}/` : '/';
+      location.replace(`${projectBase}${location.search}${location.hash}`);
+    })();
+  </script>
+</head>
+<body>Opening webR Studio…</body>
+</html>

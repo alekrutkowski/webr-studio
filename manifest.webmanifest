@@ -1,0 +1,13 @@
+{
+  "name": "webR Studio",
+  "short_name": "webR Studio",
+  "description": "A fast, private, browser-native R IDE powered by webR.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b0d10",
+  "theme_color": "#9f1239",
+  "icons": [
+    {"src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}

@@ -1,0 +1,192 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const read = path => readFileSync(join(root, path), 'utf8');
+const html = read('index.html');
+
+const ids = [...html.matchAll(/\bid="([A-Za-z][\w:.-]*)"/g)].map(match => match[1]);
+const duplicateIds = ids.filter((id, index) => ids.indexOf(id) !== index);
+assert.deepEqual([...new Set(duplicateIds)], [], `Duplicate HTML ids: ${[...new Set(duplicateIds)].join(', ')}`);
+const idSet = new Set(ids);
+
+const walk = directory => readdirSync(directory).flatMap(name => {
+  const absolute = join(directory, name);
+  if (name === '.git') return [];
+  return statSync(absolute).isDirectory() ? walk(absolute) : [absolute];
+});
+
+const jsFiles = walk(join(root, 'js')).filter(path => path.endsWith('.js'));
+for (const file of [...jsFiles, join(root, 'coi-serviceworker.js')]) {
+  execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' });
+}
+
+const missingIds = new Map();
+for (const file of jsFiles) {
+  const source = readFileSync(file, 'utf8');
+  for (const match of source.matchAll(/['"`]#([A-Za-z][\w:-]*)/g)) {
+    const id = match[1];
+    if (!idSet.has(id) && !id.startsWith('i-') && !id.endsWith('-') && !/^[0-9a-f]{3,8}$/i.test(id)) {
+      const list = missingIds.get(id) || [];
+      list.push(relative(root, file));
+      missingIds.set(id, list);
+    }
+  }
+}
+assert.equal(missingIds.size, 0, `JavaScript references missing HTML ids: ${[...missingIds].map(([id, files]) => `${id} (${[...new Set(files)].join(', ')})`).join('; ')}`);
+
+const localReferences = [
+  ...html.matchAll(/(?:src|href)="(?!https?:|data:|#|mailto:)([^"?]+)(?:\?[^"#]*)?"/g),
+  ...read('manifest.webmanifest').matchAll(/"(?:src|start_url)"\s*:\s*"(?!https?:|data:)([^"?]+)(?:\?[^"#]*)?"/g)
+].map(match => match[1].replace(/^\.\//, ''));
+for (const reference of localReferences) {
+  if (!reference || reference === '.') continue;
+  assert.ok(existsSync(join(root, reference)), `Missing local asset referenced by markup: ${reference}`);
+}
+
+for (const required of [
+  '.nojekyll', '404.html', 'LICENSE', 'README.md', 'CHANGELOG.md', 'FIX-REPORT.md',
+  'manifest.webmanifest', 'serve.py', 'RELEASE-NOTES-1.2.0.md', 'RELEASE-NOTES-1.2.1.md', 'RELEASE-NOTES-1.2.2.md', 'RELEASE-NOTES-1.2.3.md', 'RELEASE-NOTES-1.2.4.md', 'examples/webr_ide_stress_test.R',
+  '.github/workflows/pages.yml', 'js/app.js', 'js/editor.js', 'js/console.js', 'js/webr-engine.js'
+]) {
+  assert.ok(existsSync(join(root, required)), `Required project file is missing: ${required}`);
+}
+
+const config = read('js/config.js');
+assert.match(config, /APP_VERSION\s*=\s*['"]1\.2\.4['"]/, 'The release should identify itself as 1.2.4');
+assert.match(config, /WEBR_VERSION\s*=\s*['"]0\.6\.0['"]/, 'webR should be pinned to 0.6.0');
+assert.match(html, /ace-builds@1\.44\.0/, 'Ace should be pinned to 1.44.0');
+assert.match(html, /marked@18\.0\.7\/lib\/marked\.umd\.js/, 'Marked should use its published UMD browser bundle.');
+assert.doesNotMatch(html, /marked@18\.0\.7\/marked\.min\.js/, 'Do not reference the nonexistent top-level Marked bundle.');
+assert.match(html, /katex@0\.18\.1\/dist\/katex\.min\.js/, 'KaTeX should be pinned for maths rendering.');
+assert.match(html, /dompurify@3\.2\.7/, 'DOMPurify should be pinned to 3.2.7');
+assert.match(html, /Run selected<\/span>/, 'The primary run action should use the compact label.');
+assert.doesNotMatch(html, /Run selected expression/, 'The old verbose run label should not remain.');
+assert.match(html, /Ctrl(?:\+| )Alt(?:\+| )N/, 'New-file UI should avoid the browser-reserved Ctrl+N shortcut.');
+assert.match(html, /Ctrl Alt O/, 'Open-file UI should avoid the browser-reserved Ctrl+O shortcut.');
+assert.match(html, /id="new-file-button"[^>]*aria-haspopup="menu"/, 'The toolbar New button must expose file-type choices.');
+assert.match(html, /id="sidebar-new-file"[^>]*aria-haspopup="menu"/, 'The Explorer New button must expose file-type choices.');
+assert.match(html, /id="preview-active-button"[\s\S]*?>[\s\S]*?<span>Render<\/span>/, 'Markdown files need a clear editor Render button.');
+assert.match(html, /id="download-preview-html"/, 'Rendered documents need a self-contained HTML download button.');
+assert.equal((html.match(/data-maximize-pane=/g) || []).length >= 8, true, 'Every major workbench pane needs a maximize control.');
+
+
+for (const id of ['editor-more-button', 'dock-more-top', 'dock-more-bottom']) {
+  assert.match(html, new RegExp(`id="${id}"[^>]*menu-trigger[^>]*aria-haspopup="menu"`), `${id} must be a functional menu trigger.`);
+}
+const appSource = read('js/app.js');
+assert.match(appSource, /showNewFileMenu/, 'New-file buttons must open a menu.');
+assert.match(appSource, /createRMarkdownFile/, 'The IDE must provide an Rmd creation action.');
+assert.ok(appSource.indexOf("label: 'New Rmd file'") < appSource.indexOf("label: 'New R script'"), 'New Rmd file must appear above New R script.');
+assert.match(appSource, /NEW_RMD_TEMPLATE[\s\S]*output: html_document/, 'New Rmd files should start with a renderable header.');
+assert.match(appSource, /\$\$\('\.menu-trigger\[data-menu\]'\)/, 'Only named application-menu buttons may receive the generic application-menu handler.');
+assert.doesNotMatch(appSource, /\$\$\('\.menu-trigger'\)/, 'Generic menu binding must not hijack editor or dock overflow menus.');
+const editorSource = read('js/editor.js');
+const consoleSource = read('js/console.js');
+const engineSource = read('js/webr-engine.js');
+const styles = read('styles.css');
+assert.match(appSource, /showEditorActionsMenu\(event\.currentTarget\)/, 'Editor actions button must have a handler.');
+assert.match(appSource, /showDockOptionsMenu\(event\.currentTarget, 'top'\)/, 'Upper dock menu must have a handler.');
+assert.match(appSource, /showDockOptionsMenu\(event\.currentTarget, 'bottom'\)/, 'Lower dock menu must have a handler.');
+assert.match(editorSource, /enableLiveAutocompletion:\s*true/, 'Editor live completion should be enabled.');
+assert.match(consoleSource, /enableLiveAutocompletion:\s*true/, 'Console live completion should be enabled.');
+assert.match(editorSource, /acceptCompletionOrIndent/, 'Tab should explicitly accept editor completions.');
+assert.match(consoleSource, /consoleAcceptCompletionOrIndent/, 'Tab should explicitly accept console completions.');
+assert.match(editorSource, /defineRMarkdownMode/, 'The editor must register a dedicated R Markdown mode.');
+assert.match(editorSource, /embedRules\(RHighlightRules, 'r-'/, 'R highlighting must be embedded only inside R Markdown chunks.');
+assert.match(appSource, /buildSelfContainedPreviewHtml/, 'Rendered Markdown must support self-contained HTML export.');
+assert.match(appSource, /renderMathInElement/, 'Markdown rendering must process dollar-delimited maths.');
+assert.match(appSource, /evaluateInlineR/, 'R Markdown rendering must evaluate inline R expressions.');
+assert.match(html, /id="source-options-button"[^>]*aria-haspopup="menu"/, 'The Source control needs a visible options menu.');
+assert.match(appSource, /showSourceOptionsMenu/, 'The Source split button must expose Source with Echo.');
+assert.match(appSource, /sourceActiveFile\(\{ echo: true \}\)/, 'Source with Echo must be available from the UI.');
+assert.match(engineSource, /async sourceFile\(path, \{ echo = false, onOutput = null \} = \{\}\)/, 'The runtime must provide streamed file sourcing.');
+assert.match(engineSource, /new WebR\(\{ interactive: true \}\)/, 'Real-time source output requires the interactive R REPL.');
+assert.match(engineSource, /for await \(const message of webR\.stream\(\)\)/, 'The runtime must consume webR output messages as they are produced.');
+assert.match(engineSource, /writeConsole\(command\)/, 'Sourced scripts must execute through the interactive console rather than captureR buffering.');
+assert.match(engineSource, /e\$run_source <- function/, 'The R helper must provide a guarded streaming source entry point.');
+assert.match(engineSource, /e\$emit\("ECHO"/, 'Source with Echo must emit one command event per top-level R expression.');
+assert.match(appSource, /appendStreamItem\(stream, item\)/, 'Source output must be appended to the visible console during execution.');
+assert.match(appSource, /const pendingViews = \[\]/, 'View() requests from streamed sources must be queued while R is busy.');
+assert.match(appSource, /for \(const request of pendingViews\)/, 'Queued View() requests must open after source execution returns.');
+assert.match(engineSource, /if \(operation\?\.started\) operation\.finish\(\)/, 'The returning primary R prompt must finalize streamed sourcing after queued output.');
+assert.match(consoleSource, /beginStream\(\)/, 'The console must support live output sessions.');
+assert.match(consoleSource, /!result\.streamed/, 'A streamed source run must not add a redundant silent-success card.');
+assert.match(appSource, /extractHelpRequest\(source\)/, 'Console help expressions must be intercepted before R calls file.show().');
+assert.match(appSource, /highlightHelpCode/, 'R help examples and usage blocks need syntax highlighting.');
+assert.match(engineSource, /tools::Rd2HTML/, 'R help must be converted to HTML in the worker instead of using file.show().');
+assert.match(appSource, /resolveRMarkdownFigureOptions/, 'R Markdown rendering must resolve chunk-level figure dimensions.');
+assert.match(appSource, /plotWidth: figure\.width[\s\S]*plotHeight: figure\.height/, 'R Markdown chunk figures must use fig.width and fig.height at device creation time.');
+assert.match(appSource, /mode === 'asis'[\s\S]*renderMarkdown\(item\.text/, "results='asis' must be passed back through the Markdown renderer.");
+assert.match(read('js/utils.js'), /CommonMark permits at most three leading spaces/, 'Indented fenced examples must not be executed as R chunks.');
+assert.match(read('js/utils.js'), /ADD_TAGS:\s*\['semantics', 'annotation'\]/, 'MathML semantics and TeX annotations must survive sanitization.');
+assert.match(engineSource, /previous\?\.type === type[\s\S]*type === 'stdout'[\s\S]*type === 'stderr'/, 'Contiguous captureR stream lines must be coalesced before R Markdown rendering.');
+assert.match(styles, /\.prose \.r-chunk-output \{[^}]*white-space:\s*pre[^}]*line-height|\.prose \.r-chunk-output \{[^}]*font:\s*12px\/1\.35/s, 'Rendered R output should use compact, alignment-preserving preformatted layout.');
+assert.match(engineSource, /async evaluateInline\(code\)/, 'The runtime must provide scalar inline-R evaluation.');
+assert.match(appSource, /inlinePreviewAssets/, 'Document export must inline preview assets.');
+assert.match(engineSource, /e\$View <- function/, 'The R runtime must install the IDE View() helper.');
+assert.match(engineSource, /e\$views <- new\.env/, 'Temporary View() expressions should be kept outside the global environment.');
+assert.match(engineSource, /object_name <- paste0\("@view:", key\)/, 'Temporary Viewer objects should use opaque internal handles.');
+assert.match(engineSource, /e\$emit\("VIEW"/, 'View() must notify the JavaScript Viewer.');
+assert.match(engineSource, /getObjectTree/, 'List-like R objects must support recursive Viewer inspection.');
+assert.match(engineSource, /dev\.control\(displaylist = "enable"\)/, 'The SVG device must retain a display list for responsive plot replay.');
+assert.match(appSource, /ResizeObserver/, 'Plot reflow must observe pane resizing.');
+assert.match(read('js/data-viewer.js'), /navigateHistory/, 'The Viewer must implement back and forward history.');
+assert.match(read('js/data-viewer.js'), /renderTree/, 'The Viewer must implement list and environment trees.');
+assert.match(read('js/data-viewer.js'), /hideContainerRoot/, 'The recursive Viewer should hide redundant internal root rows.');
+assert.match(read('js/data-viewer.js'), /this\.info\s*=\s*\{ \.\.\.objectInfo, name: displayName \}/, 'Viewer titles should expose the user expression rather than an internal object handle.');
+
+assert.match(editorSource, /completer\.activated/, 'Tab completion acceptance must support Ace autocomplete activation state.');
+assert.match(editorSource, /typeof popupState === 'function'/, 'Tab completion acceptance must tolerate Ace popup API variants.');
+assert.match(consoleSource, /renderQueue\s*=\s*Promise\.resolve\(\)/, 'Console output must use an ordered asynchronous render queue.');
+assert.match(consoleSource, /renderEpoch/, 'Clearing the console must invalidate stale asynchronous renders.');
+assert.doesNotMatch(editorSource, /languageTools\.addCompleter/, 'Completers must not be registered globally.');
+assert.match(engineSource, /startsWith\(names_, "\.__webRStudio_"\)/, 'Environment filtering must use a valid R expression.');
+assert.doesNotMatch(styles, /border-bottom:\s*[^;]*(?:wavy|dotted)/, 'Editor overlays should not draw distracting curved or dotted underlines.');
+assert.doesNotMatch(styles, /^svg\s*\{/m, 'Generic SVG rules must not override R plot text or glyph fills.');
+assert.match(styles, /\.ui-icon\s*\{/, 'Application icon styling must be explicitly scoped.');
+assert.match(styles, /\.r-plot-svg\s*\{[^}]*fill:\s*#000[^}]*stroke:\s*none/s, 'R plot SVGs need a paint reset independent of UI icon rules.');
+assert.match(read('js/utils.js'), /ADD_TAGS:\s*\['style', 'symbol', 'use'\]/, 'SVG sanitization must preserve glyph symbols and use elements.');
+assert.match(html, /styles\.css\?v=1\.2\.4/, 'Release assets should be cache-busted after the sourcing, help, and R Markdown corrections.');
+assert.match(styles, /grid-template-columns:\s*14px[^;]+/s, 'List tree rows need a dedicated disclosure column for alignment.');
+assert.match(styles, /\.plot-viewer \.plot-frame img[^}]*width:\s*100%[^}]*height:\s*100%[^}]*object-fit:\s*contain/s, 'Plots must fill and reflow within the active viewer.');
+assert.match(appSource, /this\.editor\.deactivate\(\)/, 'Closing or deleting the last file must deactivate the editor session.');
+assert.match(appSource, /DEFAULT_SETTINGS\.dockPanels\.top/, 'Resetting the layout must restore the default panel assignment.');
+assert.match(appSource, /fileSaveQueues/, 'File saves must be serialized.');
+assert.match(appSource, /current\.revision[^\n]*=== revision/, 'A stale save must not clear a newer dirty revision.');
+assert.match(appSource, /const result = await this\.engine\.execute\(source\);[\s\S]*return await this\.finalizeExecution\(result\)/, 'Ordinary execution must use the shared post-run finalization path.');
+assert.match(engineSource, /replayLastPlot\(\)/, 'The latest recorded plot must support responsive replay.');
+assert.match(appSource, /#encoding-button/, 'The encoding control must be wired.');
+assert.match(appSource, /#indent-mode-button/, 'The indentation control must be wired.');
+assert.doesNotMatch(read('examples/webr_ide_stress_test.R'), /%,d/, 'The stress test must not use unsupported R sprintf grouping flags.');
+assert.doesNotMatch(read('examples/webr_ide_stress_test.R'), /col\s*=\s*\\?["']crimson\\?["']/i, 'The stress test must not contain the unsupported R colour name.');
+assert.match(read('examples/webr_ide_stress_test.R'), /if \(is\.null\(value\)\) return\(invisible\(NULL\)\)/, 'The timing helper must return invisible NULL for side-effect functions.');
+assert.match(read('examples/webr_ide_stress_test.R'), /Inline R result: `r 2 \+ 2`/, 'The stress report should exercise inline R Markdown evaluation.');
+assert.match(read('examples/webr_ide_stress_test.R'), /\[stream\] source heartbeat %d\/4/, 'The stress test must visibly exercise line-by-line source streaming.');
+
+const stressScript = read('examples/webr_ide_stress_test.R');
+assert.match(stressScript, /if \(is\.null\(value\)\) return\(invisible\(NULL\)\)/, 'The timing helper must suppress visible NULL results from write.csv and write.table.');
+assert.doesNotMatch(stressScript, /col\s*=\s*["']crimson["']/, 'The stress test must use R-valid colour specifications.');
+assert.doesNotMatch(stressScript, /%,d/, 'The stress test must not use unsupported comma printf formatting.');
+assert.match(stressScript, /Inline R result: `r 2 \+ 2`/, 'The stress report should exercise inline R rendering.');
+assert.match(stressScript, /user_calls <- calls\[grepl\("\^trace_level_\[123\]/, 'The stress-test traceback fixture must filter out webR wrapper frames.');
+
+const allText = walk(root)
+  .filter(path => !path.includes(`${join(root, '.git')}`))
+  .filter(path => !/\.(png|jpg|jpeg|webp|ico|zip)$/i.test(path))
+  .map(path => readFileSync(path, 'utf8'))
+  .join('\n');
+assert.ok(!allText.includes('\u2014'), 'Use spaced en dashes rather than em dashes in project text.');
+assert.ok(!allText.includes('utm_' + 'source=chatgpt.com'), 'Tracking parameters must not be present.');
+
+const buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map(match => match[1]);
+const unlabeledIconButtons = buttons.filter(attributes => {
+  if (!/class="[^"]*icon-button/.test(attributes)) return false;
+  return !/\b(?:title|aria-label)="[^"]+"/.test(attributes);
+});
+assert.equal(unlabeledIconButtons.length, 0, 'Every icon-only button needs a title or aria-label.');
+
+console.log(`Static checks passed: ${jsFiles.length} JavaScript modules, ${ids.length} unique HTML ids, ${localReferences.length} local asset references.`);

@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="A fast, private, browser-native R IDE powered by webR.">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <title>webR Studio</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="preconnect" href="https://webr.r-wasm.org" crossorigin>
+  <link rel="stylesheet" href="styles.css?v=1.2.4">
+  <script src="coi-serviceworker.js"></script>
+  <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict/ace.js"></script>
+  <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js"></script>
+  <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/dompurify@3.2.7/dist/purify.min.js"></script>
+  <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/katex@0.18.1/dist/katex.min.js" integrity="sha384-ycJ6GAwiS15LoUPipwJOrWTvkUHl/YqELValBwI5I4awP1EeEQJYarj+w85ntcz7"></script>
+</head>
+<body>
+  <svg aria-hidden="true" class="svg-sprite">
+    <symbol id="i-logo" viewBox="0 0 24 24"><path d="M5.2 4.8c3.7-2.4 9.9-2.3 13.4.2 3.1 2.2 3.4 5.7.6 7.8-1.2.9-2.9 1.4-4.7 1.5l3.7 4.9h-4.3l-3.4-4.7H8.6v4.7H5V9.1h6.6c1.8 0 2.8-.6 2.8-1.6 0-1.1-1.2-1.7-3.5-1.7-2.1 0-3.8.4-5.4 1.4L5.2 4.8Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M4 3h14l2 2v16H4z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m0 0L7 8m5-5 5 5M5 13v7h14v-7"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m0 0-5-5m5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.9-3L3 10"/><path d="M3 4v6h6"/><path d="M4 13a8 8 0 0 0 14.9 3l2.1-2"/><path d="M21 20v-6h-6"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="m9 7-5 5 5 5"/><path d="M20 17a7 7 0 0 0-7-7H4"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"/><path d="M4 17a7 7 0 0 1 7-7h9"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 9-4 3 4 3m8-6 4 3-4 3m-3-9-2 12"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15.2A8.5 8.5 0 0 1 8.8 4 8.5 8.5 0 1 0 20 15.2Z"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m5 0h5"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10m6 10V4m6 16v-7m5 7H2"/></symbol>
+    <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M9 4v16"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 8 9 5 9-5v8l-9 5-9-5z"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.6 2.1c-.9.5-1.4 1-1.4 2M12 17h.01"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.2 19.5v-2.2c-2.7.6-3.3-1.2-3.3-1.2-.4-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.1-.2-4.3-1.1-4.3-4.7 0-1 .4-1.9 1-2.6-.1-.3-.4-1.3.1-2.6 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.3.2 2.3.1 2.6.6.7 1 1.6 1 2.6 0 3.6-2.2 4.4-4.3 4.7.4.3.7.9.7 1.8v3.1A10 10 0 0 0 12 2Z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8zM6 7l1 14h10l1-14M10 11v6m4-6v6"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-command" viewBox="0 0 24 24"><path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v5l-4 2v-7z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></symbol>
+    <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m0-9h12"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H4z"/><path d="M20 4h-6a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h6z"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6-9 9"/><path d="M19 13v7H4V5h7"/></symbol>
+    <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/><path d="M3 8l6-6M21 8l-6-6M3 16l6 6M21 16l-6 6"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 24 24"><path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5"/><path d="M8 8 3 3M16 8l5-5M8 16l-5 5M16 16l5 5"/></symbol>
+    <symbol id="i-tree" viewBox="0 0 24 24"><path d="M5 4v16M5 8h6M5 16h6"/><rect x="11" y="5" width="8" height="6" rx="1"/><rect x="11" y="13" width="8" height="6" rx="1"/></symbol>
+  </svg>
+
+  <div id="boot-screen" class="boot-screen">
+    <div class="boot-card">
+      <div class="brand-mark"><svg class="ui-icon"><use href="#i-logo"></use></svg></div>
+      <div>
+        <h1>webR Studio</h1>
+        <p id="boot-message">Restoring your workspace…</p>
+      </div>
+      <div class="boot-progress"><span id="boot-progress-bar"></span></div>
+      <button id="boot-skip" class="button ghost small" hidden>Open without R</button>
+    </div>
+  </div>
+
+  <div id="app" class="app-shell" hidden>
+    <header class="titlebar">
+      <div class="brand" title="webR Studio">
+        <span class="brand-mark small"><svg class="ui-icon"><use href="#i-logo"></use></svg></span>
+        <span class="brand-name">webR Studio</span>
+        <span class="badge beta">browser IDE</span>
+      </div>
+      <nav class="menu-bar" aria-label="Application menu">
+        <button class="menu-trigger" data-menu="file">File</button>
+        <button class="menu-trigger" data-menu="edit">Edit</button>
+        <button class="menu-trigger" data-menu="code">Code</button>
+        <button class="menu-trigger" data-menu="session">Session</button>
+        <button class="menu-trigger" data-menu="view">View</button>
+        <button class="menu-trigger" data-menu="help">Help</button>
+      </nav>
+      <div class="titlebar-spacer"></div>
+      <button id="command-palette-button" class="command-search" title="Command palette (Ctrl+Shift+P)">
+        <svg class="ui-icon"><use href="#i-search"></use></svg><span>Search commands</span><kbd>Ctrl Shift P</kbd>
+      </button>
+      <div class="title-actions">
+        <button id="share-url-button" class="icon-button" title="Share workspace URL"><svg class="ui-icon"><use href="#i-link"></use></svg></button>
+        <button id="theme-button" class="icon-button" title="Change color theme"><svg class="ui-icon"><use href="#i-sun"></use></svg></button>
+        <button id="settings-button" class="icon-button" title="Settings"><svg class="ui-icon"><use href="#i-settings"></use></svg></button>
+      </div>
+    </header>
+
+    <section class="toolbar" aria-label="Main toolbar">
+      <div class="toolbar-group">
+        <button id="new-file-button" class="button ghost compact" title="New file" aria-label="New file" aria-haspopup="menu" aria-expanded="false"><svg class="ui-icon"><use href="#i-plus"></use></svg><span>New</span></button>
+        <button id="upload-button" class="button ghost compact" title="Upload files"><svg class="ui-icon"><use href="#i-upload"></use></svg><span>Upload</span></button>
+        <button id="save-button" class="button ghost compact" title="Save active file (Ctrl+S)"><svg class="ui-icon"><use href="#i-save"></use></svg><span>Save</span></button>
+        <button id="download-button" class="button ghost compact" title="Download selected files"><svg class="ui-icon"><use href="#i-download"></use></svg></button>
+      </div>
+      <div class="toolbar-separator"></div>
+      <div class="toolbar-group">
+        <button id="undo-button" class="icon-button" title="Undo (Ctrl+Z)"><svg class="ui-icon"><use href="#i-undo"></use></svg></button>
+        <button id="redo-button" class="icon-button" title="Redo (Ctrl+Y)"><svg class="ui-icon"><use href="#i-redo"></use></svg></button>
+        <button id="find-button" class="icon-button" title="Find and replace (Ctrl+F)"><svg class="ui-icon"><use href="#i-search"></use></svg></button>
+        <button id="format-button" class="button ghost compact" title="Auto-indent selection (Ctrl+I)"><svg class="ui-icon"><use href="#i-code"></use></svg><span>Indent</span></button>
+      </div>
+      <div class="toolbar-separator"></div>
+      <div class="toolbar-group run-group">
+        <button id="run-selection-button" class="button primary compact" title="Run selected (Ctrl+Enter)"><svg class="ui-icon"><use href="#i-play"></use></svg><span>Run selected</span></button>
+        <div class="split-button source-split">
+          <button id="run-script-button" class="button secondary compact" title="Source active R script (Ctrl+Shift+Enter)"><span>Source</span></button>
+          <button id="source-options-button" class="button secondary compact split-menu-button" title="Source options" aria-label="Source options" aria-haspopup="menu" aria-expanded="false"><svg class="ui-icon chevron-down"><use href="#i-chevron"></use></svg></button>
+        </div>
+        <button id="stop-button" class="button danger-ghost compact" title="Stop R execution" disabled><svg class="ui-icon"><use href="#i-stop"></use></svg><span>Stop</span></button>
+      </div>
+      <div class="toolbar-separator"></div>
+      <div class="toolbar-group">
+        <button id="check-code-button" class="button ghost compact" title="Check selected R code with Mistral"><svg class="ui-icon"><use href="#i-sparkles"></use></svg><span>Check my code</span></button>
+        <button id="timing-button" class="toggle-button" aria-pressed="false" title="Measure expression execution time"><svg class="ui-icon"><use href="#i-clock"></use></svg><span>Timing</span></button>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <div id="r-status" class="runtime-status" data-state="loading" title="webR runtime status">
+        <span class="status-dot"></span><span class="runtime-label">Starting R…</span>
+      </div>
+      <button id="restart-r-button" class="button ghost compact" title="Restart webR"><svg class="ui-icon"><use href="#i-refresh"></use></svg><span>Restart R</span></button>
+    </section>
+
+    <main id="workbench" class="workbench">
+      <aside class="activity-bar" aria-label="Primary navigation">
+        <div class="activity-top">
+          <button class="activity-button active" data-sidebar="explorer" title="Explorer"><svg class="ui-icon"><use href="#i-file"></use></svg></button>
+          <button class="activity-button" data-sidebar="search" title="Search files"><svg class="ui-icon"><use href="#i-search"></use></svg></button>
+          <button class="activity-button" data-sidebar="workspace" title="Workspace snapshots"><svg class="ui-icon"><use href="#i-database"></use></svg></button>
+          <button class="activity-button" data-sidebar="gists" title="GitHub Gists"><svg class="ui-icon"><use href="#i-github"></use></svg></button>
+        </div>
+        <div class="activity-bottom">
+          <button id="layout-button" class="activity-button" title="Layout presets"><svg class="ui-icon"><use href="#i-layout"></use></svg></button>
+          <button id="activity-settings-button" class="activity-button" title="Settings"><svg class="ui-icon"><use href="#i-settings"></use></svg></button>
+        </div>
+      </aside>
+
+      <aside id="sidebar" class="sidebar">
+        <section id="sidebar-explorer" class="sidebar-view active">
+          <div class="pane-heading">
+            <span>EXPLORER</span>
+            <div>
+              <button id="sidebar-new-file" class="mini-icon" title="New file" aria-label="New file" aria-haspopup="menu" aria-expanded="false"><svg class="ui-icon"><use href="#i-plus"></use></svg></button>
+              <button id="sidebar-upload" class="mini-icon" title="Upload files"><svg class="ui-icon"><use href="#i-upload"></use></svg></button>
+              <button id="sidebar-upload-folder" class="mini-icon" title="Upload folder"><svg class="ui-icon"><use href="#i-folder"></use></svg></button>
+              <button id="sidebar-download-all" class="mini-icon" title="Download workspace as ZIP"><svg class="ui-icon"><use href="#i-download"></use></svg></button>
+              <button class="mini-icon pane-maximize-button" data-maximize-pane="sidebar" title="Maximize Project pane" aria-label="Maximize Project pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button>
+            </div>
+          </div>
+          <div class="sidebar-section open">
+            <button class="section-header"><svg class="ui-icon"><use href="#i-chevron"></use></svg><span>PROJECT</span><span id="project-file-count" class="muted-count">0</span></button>
+            <div id="file-tree" class="file-tree" role="tree"></div>
+          </div>
+          <div class="sidebar-section open flex-fill">
+            <button class="section-header"><svg class="ui-icon"><use href="#i-chevron"></use></svg><span>PROBLEMS</span><span id="problem-count" class="badge count">0</span></button>
+            <div id="problems-list" class="problems-list empty-state compact-empty">
+              <svg class="ui-icon"><use href="#i-check"></use></svg><p>No diagnostics</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="sidebar-search" class="sidebar-view">
+          <div class="pane-heading"><span>SEARCH</span><button class="mini-icon pane-maximize-button" data-maximize-pane="sidebar" title="Maximize Project pane" aria-label="Maximize Project pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button></div>
+          <div class="sidebar-form">
+            <div class="input-with-icon"><svg class="ui-icon"><use href="#i-search"></use></svg><input id="workspace-search-input" type="search" placeholder="Search across files"></div>
+            <label class="checkbox-row"><input id="search-regex" type="checkbox"><span>Regular expression</span></label>
+            <label class="checkbox-row"><input id="search-case" type="checkbox"><span>Match case</span></label>
+          </div>
+          <div id="workspace-search-results" class="search-results empty-state compact-empty"><p>Type to search your project.</p></div>
+        </section>
+
+        <section id="sidebar-workspace" class="sidebar-view">
+          <div class="pane-heading"><span>WORKSPACE</span><div><button id="new-snapshot-button" class="mini-icon" title="Create snapshot"><svg class="ui-icon"><use href="#i-plus"></use></svg></button><button class="mini-icon pane-maximize-button" data-maximize-pane="sidebar" title="Maximize Project pane" aria-label="Maximize Project pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button></div></div>
+          <div class="sidebar-actions stacked">
+            <button id="export-workspace-json" class="button secondary full"><svg class="ui-icon"><use href="#i-download"></use></svg>Export project JSON</button>
+            <button id="import-workspace-json" class="button secondary full"><svg class="ui-icon"><use href="#i-upload"></use></svg>Import project JSON</button>
+            <button id="export-rdata" class="button secondary full"><svg class="ui-icon"><use href="#i-download"></use></svg>Save environment .RData</button>
+            <button id="import-rdata" class="button secondary full"><svg class="ui-icon"><use href="#i-upload"></use></svg>Load environment .RData</button>
+          </div>
+          <div class="sidebar-section open flex-fill">
+            <button class="section-header"><svg class="ui-icon"><use href="#i-chevron"></use></svg><span>SNAPSHOTS</span></button>
+            <div id="snapshots-list" class="snapshot-list empty-state compact-empty"><p>No manual snapshots yet.</p></div>
+          </div>
+        </section>
+
+        <section id="sidebar-gists" class="sidebar-view">
+          <div class="pane-heading"><span>GITHUB GISTS</span><button class="mini-icon pane-maximize-button" data-maximize-pane="sidebar" title="Maximize Project pane" aria-label="Maximize Project pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button></div>
+          <div class="sidebar-form">
+            <label for="gist-token">Personal access token</label>
+            <div class="password-row"><input id="gist-token" type="password" autocomplete="off" placeholder="github_pat_…"><button id="toggle-token" class="mini-icon" title="Show or hide token"><svg class="ui-icon"><use href="#i-more"></use></svg></button></div>
+            <label class="checkbox-row"><input id="persist-gist-token" type="checkbox"><span>Store token in this browser</span></label>
+            <p class="field-help">Use a fine-grained token with Gists read and write permission. It is sent only to GitHub.</p>
+            <label for="gist-reference">Gist URL or ID</label>
+            <input id="gist-reference" type="text" placeholder="https://gist.github.com/…">
+            <button id="import-gist-button" class="button secondary full"><svg class="ui-icon"><use href="#i-download"></use></svg>Import gist</button>
+            <button id="open-gist-export-button" class="button primary full"><svg class="ui-icon"><use href="#i-upload"></use></svg>Publish selected files</button>
+          </div>
+          <div id="gist-result" class="sidebar-note" hidden></div>
+        </section>
+      </aside>
+
+      <div id="sidebar-resizer" class="resizer vertical" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
+
+      <section id="center-column" class="center-column">
+        <section id="editor-pane" class="pane editor-pane">
+          <div class="pane-tabs-row">
+            <div id="editor-tabs" class="tabs scrollable" role="tablist"></div>
+            <div class="pane-actions">
+              <button id="preview-active-button" class="button secondary compact document-render-button" title="Render Markdown or R Markdown" hidden><svg class="ui-icon"><use href="#i-book"></use></svg><span>Render</span></button>
+              <button class="mini-icon pane-maximize-button" data-maximize-pane="editor-pane" title="Maximize Editor pane" aria-label="Maximize Editor pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button>
+              <button id="editor-more-button" class="mini-icon menu-trigger" type="button" title="Editor actions" aria-haspopup="menu" aria-expanded="false"><svg class="ui-icon"><use href="#i-more"></use></svg></button>
+            </div>
+          </div>
+          <div id="editor-breadcrumbs" class="breadcrumbs"><span>project</span><svg class="ui-icon"><use href="#i-chevron"></use></svg><span>untitled.R</span></div>
+          <div class="editor-stage">
+            <div id="editor" class="ace-host" aria-label="Code editor"></div>
+            <textarea id="fallback-editor" class="fallback-editor" spellcheck="false" aria-label="Code editor fallback" hidden></textarea>
+            <div id="editor-welcome" class="editor-welcome" hidden>
+              <div class="welcome-logo"><svg class="ui-icon"><use href="#i-logo"></use></svg></div>
+              <h2>R, ready in your browser</h2>
+              <p>Your code and data stay local unless you explicitly publish or download them.</p>
+              <div class="welcome-grid">
+                <button data-welcome-action="new-rmd"><span>New Rmd file</span><kbd>Rmd</kbd></button>
+                <button data-welcome-action="new"><span>New R script</span><kbd>Ctrl Alt N</kbd></button>
+                <button data-welcome-action="upload"><span>Open files</span><kbd>Ctrl Alt O</kbd></button>
+                <button data-welcome-action="command"><span>Command palette</span><kbd>Ctrl Shift P</kbd></button>
+                <button data-welcome-action="sample"><span>Load sample project</span><kbd>Try it</kbd></button>
+              </div>
+            </div>
+          </div>
+          <div class="editor-status-strip">
+            <span id="cursor-position">Ln 1, Col 1</span>
+            <button id="language-mode-button">R</button>
+            <button id="encoding-button" title="Project text encoding">UTF-8</button>
+            <button id="indent-mode-button" title="Open indentation settings">Spaces: 2</button>
+          </div>
+        </section>
+
+        <div id="center-resizer" class="resizer horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize editor and console"></div>
+
+        <section id="console-pane" class="pane console-pane">
+          <div class="pane-tabs-row console-header">
+            <div class="tabs compact-tabs">
+              <button class="tab active" data-console-view="console"><svg class="ui-icon"><use href="#i-terminal"></use></svg><span>Console</span></button>
+              <button class="tab" data-console-view="jobs"><span>Background</span><span class="badge count">0</span></button>
+            </div>
+            <div class="pane-actions">
+              <button id="clear-console-button" class="mini-icon" title="Clear console"><svg class="ui-icon"><use href="#i-trash"></use></svg></button>
+              <button id="console-popout-button" class="mini-icon pane-maximize-button" data-maximize-pane="console-pane" title="Maximize Console pane" aria-label="Maximize Console pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button>
+            </div>
+          </div>
+          <div id="console-output" class="console-output" role="log" aria-live="polite"></div>
+          <div class="console-input-wrap">
+            <div id="console-prompt" class="console-prompt">&gt;</div>
+            <div id="console-input" class="ace-host console-input" aria-label="R console input"></div>
+            <textarea id="fallback-console" class="fallback-console" spellcheck="false" aria-label="R console input fallback" hidden></textarea>
+            <div class="console-input-actions">
+              <button id="console-run-button" class="mini-icon primary-icon" title="Run expression (Ctrl+Enter)"><svg class="ui-icon"><use href="#i-play"></use></svg></button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <div id="right-resizer" class="resizer vertical" role="separator" aria-orientation="vertical" aria-label="Resize right dock"></div>
+
+      <aside id="right-dock" class="right-dock">
+        <section id="right-top-pane" class="pane dock-pane" data-dock="top">
+          <div class="pane-tabs-row">
+            <div class="tabs compact-tabs dock-tabs" data-dock-tabs="top" role="tablist">
+              <button class="tab active" draggable="true" data-panel="environment">Environment</button>
+              <button class="tab" draggable="true" data-panel="outline">Outline</button>
+              <button class="tab" draggable="true" data-panel="packages">Packages</button>
+            </div>
+            <div class="pane-actions">
+              <button id="refresh-active-panel" class="mini-icon" title="Refresh active panel"><svg class="ui-icon"><use href="#i-refresh"></use></svg></button>
+              <button class="mini-icon pane-maximize-button" data-maximize-pane="right-top-pane" title="Maximize upper pane" aria-label="Maximize upper pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button>
+              <button id="dock-more-top" class="mini-icon menu-trigger" type="button" title="Panel options" aria-haspopup="menu" aria-expanded="false"><svg class="ui-icon"><use href="#i-more"></use></svg></button>
+            </div>
+          </div>
+          <div class="dock-content">
+            <section id="panel-environment" class="panel-view active" data-panel-view="environment">
+              <div class="panel-toolbar">
+                <div class="input-with-icon small"><svg class="ui-icon"><use href="#i-search"></use></svg><input id="environment-filter" type="search" placeholder="Filter objects"></div>
+                <button id="environment-clean-button" class="button danger-ghost compact" title="Remove all objects"><svg class="ui-icon"><use href="#i-trash"></use></svg><span>Clear all</span></button>
+              </div>
+              <div id="environment-table" class="environment-table empty-state"><svg class="ui-icon"><use href="#i-box"></use></svg><p>The global environment is empty.</p></div>
+            </section>
+            <section id="panel-outline" class="panel-view" data-panel-view="outline">
+              <div class="panel-toolbar"><div class="input-with-icon small"><svg class="ui-icon"><use href="#i-search"></use></svg><input id="outline-filter" type="search" placeholder="Filter symbols"></div></div>
+              <div id="outline-list" class="outline-list empty-state"><svg class="ui-icon"><use href="#i-list"></use></svg><p>No symbols in this file.</p></div>
+            </section>
+            <section id="panel-packages" class="panel-view" data-panel-view="packages">
+              <div class="panel-toolbar package-toolbar">
+                <div class="input-with-icon small"><svg class="ui-icon"><use href="#i-search"></use></svg><input id="package-filter" type="search" placeholder="Find installed packages"></div>
+                <button id="install-package-button" class="button primary compact"><svg class="ui-icon"><use href="#i-plus"></use></svg><span>Install</span></button>
+              </div>
+              <div id="packages-table" class="packages-table empty-state"><svg class="ui-icon"><use href="#i-box"></use></svg><p>Package library will appear after R starts.</p></div>
+            </section>
+          </div>
+        </section>
+
+        <div id="dock-resizer" class="resizer horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize dock panels"></div>
+
+        <section id="right-bottom-pane" class="pane dock-pane" data-dock="bottom">
+          <div class="pane-tabs-row">
+            <div class="tabs compact-tabs dock-tabs" data-dock-tabs="bottom" role="tablist">
+              <button class="tab active" draggable="true" data-panel="plots">Plots <span id="plot-count" class="badge count">0</span></button>
+              <button class="tab" draggable="true" data-panel="help">Help</button>
+              <button class="tab" draggable="true" data-panel="data">Data</button>
+              <button class="tab" draggable="true" data-panel="preview">Preview</button>
+            </div>
+            <div class="pane-actions">
+              <button id="export-panel-button" class="mini-icon" title="Export current content"><svg class="ui-icon"><use href="#i-download"></use></svg></button>
+              <button class="mini-icon pane-maximize-button" data-maximize-pane="right-bottom-pane" title="Maximize lower pane" aria-label="Maximize lower pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button>
+              <button id="dock-more-bottom" class="mini-icon menu-trigger" type="button" title="Panel options" aria-haspopup="menu" aria-expanded="false"><svg class="ui-icon"><use href="#i-more"></use></svg></button>
+            </div>
+          </div>
+          <div class="dock-content">
+            <section id="panel-plots" class="panel-view active" data-panel-view="plots">
+              <div class="plot-toolbar">
+                <button id="plot-previous" class="mini-icon" title="Previous plot"><svg class="ui-icon flip-x"><use href="#i-chevron"></use></svg></button>
+                <span id="plot-position">No plots</span>
+                <button id="plot-next" class="mini-icon" title="Next plot"><svg class="ui-icon"><use href="#i-chevron"></use></svg></button>
+                <div class="toolbar-spacer"></div>
+                <select id="plot-export-format" aria-label="Plot export format"><option value="svg">SVG</option><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select>
+                <button id="plot-export-button" class="button secondary compact"><svg class="ui-icon"><use href="#i-download"></use></svg><span>Export</span></button>
+                <button id="clear-plots-button" class="mini-icon" title="Clear plots"><svg class="ui-icon"><use href="#i-trash"></use></svg></button>
+              </div>
+              <div id="plot-viewer" class="plot-viewer empty-state"><svg class="ui-icon"><use href="#i-chart"></use></svg><p>Plots appear here as scalable SVG.</p></div>
+            </section>
+            <section id="panel-help" class="panel-view" data-panel-view="help">
+              <div class="help-toolbar">
+                <button id="help-back" class="mini-icon" title="Back"><svg class="ui-icon flip-x"><use href="#i-chevron"></use></svg></button>
+                <button id="help-forward" class="mini-icon" title="Forward"><svg class="ui-icon"><use href="#i-chevron"></use></svg></button>
+                <div class="input-with-icon small flex-fill"><svg class="ui-icon"><use href="#i-search"></use></svg><input id="help-search" type="search" placeholder="R help topic"></div>
+                <button id="help-search-button" class="button secondary compact">Open</button>
+              </div>
+              <article id="help-viewer" class="help-viewer prose empty-state"><svg class="ui-icon"><use href="#i-help"></use></svg><p>Press F1 on an R function to open its help.</p></article>
+            </section>
+            <section id="panel-data" class="panel-view" data-panel-view="data">
+              <div id="data-viewer" class="data-viewer empty-state"><svg class="ui-icon"><use href="#i-table"></use></svg><p>Open a data frame or CSV file to inspect it.</p></div>
+            </section>
+            <section id="panel-preview" class="panel-view" data-panel-view="preview">
+              <div class="preview-toolbar">
+                <span id="preview-title">Document preview</span>
+                <div class="toolbar-spacer"></div>
+                <button id="refresh-preview-button" class="button secondary compact"><svg class="ui-icon"><use href="#i-refresh"></use></svg><span>Render</span></button>
+                <button id="download-preview-html" class="button secondary compact" title="Download a self-contained HTML file"><svg class="ui-icon"><use href="#i-download"></use></svg><span>HTML</span></button>
+                <button id="open-preview-window" class="mini-icon" title="Open preview in new window"><svg class="ui-icon"><use href="#i-external"></use></svg></button>
+              </div>
+              <article id="document-preview" class="document-preview prose empty-state"><svg class="ui-icon"><use href="#i-book"></use></svg><p>Markdown and R Markdown previews appear here.</p></article>
+            </section>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <button id="runtime-status-detail" class="status-item"><span class="status-dot small"></span><span>webR</span></button>
+      <span id="save-status" class="status-item">All changes saved</span>
+      <div class="status-spacer"></div>
+      <button id="pipe-status" class="status-item" title="Pipe inserted by Ctrl+Shift+M">Pipe: |&gt;</button>
+      <button id="font-status" class="status-item">Ubuntu Mono 14</button>
+      <span id="memory-status" class="status-item">Private, local workspace</span>
+    </footer>
+  </div>
+
+  <input id="file-input" type="file" multiple hidden accept=".R,.r,.Rmd,.rmd,.md,.markdown,.csv,.tsv,.txt,.json,.RData,.rdata,*/*">
+  <input id="folder-input" type="file" multiple webkitdirectory directory hidden>
+  <input id="workspace-json-input" type="file" hidden accept="application/json,.json">
+  <input id="rdata-input" type="file" hidden accept=".RData,.rdata,application/octet-stream">
+
+  <div id="menu-popover" class="menu-popover" hidden></div>
+  <div id="context-menu" class="menu-popover context-menu" hidden></div>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+  <dialog id="command-dialog" class="dialog command-dialog">
+    <div class="command-input-wrap"><svg class="ui-icon"><use href="#i-search"></use></svg><input id="command-input" type="search" placeholder="Type a command or search files…" autocomplete="off"><kbd>Esc</kbd></div>
+    <div id="command-results" class="command-results" role="listbox"></div>
+  </dialog>
+
+  <dialog id="settings-dialog" class="dialog settings-dialog">
+    <form method="dialog" class="dialog-frame">
+      <header class="dialog-header"><div><h2>Settings</h2><p>Saved automatically in this browser.</p></div><button class="icon-button" value="cancel" aria-label="Close"><svg class="ui-icon"><use href="#i-x"></use></svg></button></header>
+      <div class="settings-body">
+        <nav class="settings-nav" aria-label="Settings categories">
+          <button type="button" class="active" data-settings-section="appearance">Appearance</button>
+          <button type="button" data-settings-section="editor">Editor</button>
+          <button type="button" data-settings-section="console">Console</button>
+          <button type="button" data-settings-section="execution">R execution</button>
+          <button type="button" data-settings-section="storage">Storage and privacy</button>
+          <button type="button" data-settings-section="keyboard">Keyboard</button>
+        </nav>
+        <div class="settings-content">
+          <section class="settings-section active" data-settings-view="appearance">
+            <h3>Appearance</h3>
+            <div class="setting-row"><div><label for="theme-select">Color theme</label><p>Follow the operating system or choose a fixed theme.</p></div><select id="theme-select"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option><option value="high-contrast">High contrast</option></select></div>
+            <div class="setting-row"><div><label for="editor-theme-select">Editor theme</label><p>Crimson Editor is the light-theme default.</p></div><select id="editor-theme-select"><option value="crimson_editor">Crimson Editor</option><option value="chrome">Chrome</option><option value="github">GitHub</option><option value="textmate">TextMate</option><option value="tomorrow">Tomorrow</option><option value="monokai">Monokai</option><option value="dracula">Dracula</option><option value="tomorrow_night">Tomorrow Night</option><option value="one_dark">One Dark</option><option value="nord_dark">Nord Dark</option></select></div>
+            <div class="setting-row"><div><label for="font-family-select">Coding font</label><p>Applied to both editor and console.</p></div><select id="font-family-select"><option value="Ubuntu Mono">Ubuntu Mono</option><option value="JetBrains Mono">JetBrains Mono</option><option value="Fira Code">Fira Code</option><option value="Cascadia Code">Cascadia Code</option><option value="IBM Plex Mono">IBM Plex Mono</option><option value="Source Code Pro">Source Code Pro</option><option value="Iosevka">Iosevka</option><option value="Inconsolata">Inconsolata</option><option value="Roboto Mono">Roboto Mono</option><option value="Victor Mono">Victor Mono</option><option value="Space Mono">Space Mono</option><option value="Recursive Mono">Recursive Mono</option><option value="ui-monospace">System monospace</option></select></div>
+            <div class="setting-row"><div><label for="font-size-input">Font size</label><p>10 to 28 pixels.</p></div><div class="range-control"><input id="font-size-input" type="range" min="10" max="28" step="1"><output id="font-size-output">14 px</output></div></div>
+            <div class="setting-row"><div><label for="font-weight-select">Font weight</label><p>Choose a weight supported by the selected font.</p></div><select id="font-weight-select"><option value="300">Light 300</option><option value="400">Regular 400</option><option value="500">Medium 500</option><option value="600">Semi-bold 600</option><option value="700">Bold 700</option></select></div>
+            <div class="setting-row"><div><label for="ligatures-toggle">Font ligatures</label><p>Enable programming ligatures where available.</p></div><label class="switch"><input id="ligatures-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="density-select">Interface density</label><p>Change spacing without changing code size.</p></div><select id="density-select"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></div>
+          </section>
+
+          <section class="settings-section" data-settings-view="editor">
+            <h3>Editor</h3>
+            <div class="setting-row"><div><label for="tab-size-select">Indent size</label><p>Used by Tab and smart indentation.</p></div><select id="tab-size-select"><option value="2">2 spaces</option><option value="4">4 spaces</option><option value="8">8 spaces</option></select></div>
+            <div class="setting-row"><div><label for="wrap-toggle">Word wrap</label><p>Wrap long lines at the editor edge.</p></div><label class="switch"><input id="wrap-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="print-margin-toggle">Print margin</label><p>Show a 100-column guide in the editor.</p></div><label class="switch"><input id="print-margin-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="active-line-toggle">Current line highlight</label><p>Visually identify the active editor line.</p></div><label class="switch"><input id="active-line-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="rainbow-toggle">Rainbow delimiters</label><p>Color matching parentheses, brackets, and braces by nesting depth.</p></div><label class="switch"><input id="rainbow-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="lint-toggle">Live R diagnostics</label><p>Run fast local checks while typing and parser checks when R is idle.</p></div><label class="switch"><input id="lint-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="autocomplete-toggle">Autocomplete</label><p>Combine R keywords, project symbols, and live R objects.</p></div><label class="switch"><input id="autocomplete-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="type-hints-toggle">Data type hints</label><p>Show inferred object classes beside symbols and in completions.</p></div><label class="switch"><input id="type-hints-toggle" type="checkbox"><span></span></label></div>
+          </section>
+
+          <section class="settings-section" data-settings-view="console">
+            <h3>Console</h3>
+            <div class="setting-row"><div><label for="console-height-select">Default console size</label><p>Used when resetting the layout.</p></div><select id="console-height-select"><option value="30">30%</option><option value="38">38%</option><option value="45">45%</option></select></div>
+            <div class="setting-row"><div><label for="console-history-input">History limit</label><p>Multiline expressions retained in local storage.</p></div><input id="console-history-input" type="number" min="50" max="5000" step="50"></div>
+            <div class="setting-row"><div><label for="console-traceback-toggle">Automatic tracebacks</label><p>Append a compact call stack after uncaught errors.</p></div><label class="switch"><input id="console-traceback-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="console-follow-toggle">Follow output</label><p>Keep the latest output visible while R runs.</p></div><label class="switch"><input id="console-follow-toggle" type="checkbox"><span></span></label></div>
+          </section>
+
+          <section class="settings-section" data-settings-view="execution">
+            <h3>R execution</h3>
+            <div class="setting-row"><div><label for="pipe-select">Ctrl+Shift+M pipe</label><p>Insert the native or magrittr pipe in editor and console.</p></div><select id="pipe-select"><option value="|>">Native |&gt;</option><option value="%>%">magrittr %&gt;%</option></select></div>
+            <div class="setting-row"><div><label for="timing-toggle-setting">Measure execution time</label><p>Show wall-clock time beneath each expression.</p></div><label class="switch"><input id="timing-toggle-setting" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="checkpoint-toggle">Checkpoint environment</label><p>Save .RData after successful top-level console executions.</p></div><label class="switch"><input id="checkpoint-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="restore-r-toggle">Restore R environment at startup</label><p>Load the latest automatic checkpoint after webR starts.</p></div><label class="switch"><input id="restore-r-toggle" type="checkbox"><span></span></label></div>
+            <div class="setting-row"><div><label for="graphics-size">Default plot size</label><p>Dimensions used by the SVG graphics device.</p></div><div class="inline-inputs"><input id="plot-width" type="number" min="2" max="20" step="0.5" aria-label="Plot width"><span>×</span><input id="plot-height" type="number" min="2" max="20" step="0.5" aria-label="Plot height"><span>in</span></div></div>
+          </section>
+
+          <section class="settings-section" data-settings-view="storage">
+            <h3>Storage and privacy</h3>
+            <div class="storage-meter"><div><span>Browser workspace</span><strong id="storage-usage">Calculating…</strong></div><div class="meter"><span id="storage-meter-fill"></span></div><p>Files, settings, command history, and checkpoints are kept in IndexedDB.</p></div>
+            <div class="setting-row"><div><label for="autosave-delay">Autosave delay</label><p>Save document edits after a quiet period.</p></div><select id="autosave-delay"><option value="300">0.3 seconds</option><option value="700">0.7 seconds</option><option value="1500">1.5 seconds</option><option value="3000">3 seconds</option></select></div>
+            <div class="danger-zone"><h4>Reset</h4><p>Restore default settings without deleting project files, or erase all local IDE data.</p><div><button id="restore-default-settings" type="button" class="button secondary">Restore default settings</button><button id="erase-local-data" type="button" class="button danger">Erase all local data</button></div></div>
+          </section>
+
+          <section class="settings-section" data-settings-view="keyboard">
+            <h3>Keyboard shortcuts</h3>
+            <div class="shortcut-table">
+              <div><span>Run selected</span><kbd>Ctrl Enter</kbd></div>
+              <div><span>New R script</span><kbd>Ctrl Alt N</kbd></div>
+              <div><span>Upload files</span><kbd>Ctrl Alt O</kbd></div>
+              <div><span>Source active script</span><kbd>Ctrl Shift Enter</kbd></div>
+              <div><span>Insert pipe</span><kbd>Ctrl Shift M</kbd></div>
+              <div><span>Smart indent</span><kbd>Ctrl I</kbd></div>
+              <div><span>Function help</span><kbd>F1</kbd></div>
+              <div><span>Jump to definition</span><kbd>F12</kbd></div>
+              <div><span>Advanced find and replace</span><kbd>Ctrl F</kbd></div>
+              <div><span>Command palette</span><kbd>Ctrl Shift P</kbd></div>
+              <div><span>Save file</span><kbd>Ctrl S</kbd></div>
+              <div><span>Undo / redo</span><kbd>Ctrl Z</kbd><kbd>Ctrl Y</kbd></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="gist-export-dialog" class="dialog medium-dialog">
+    <form method="dialog" class="dialog-frame">
+      <header class="dialog-header"><div><h2>Publish to GitHub Gist</h2><p>Select text files to include.</p></div><button class="icon-button" value="cancel" aria-label="Close"><svg class="ui-icon"><use href="#i-x"></use></svg></button></header>
+      <div class="dialog-content">
+        <label for="gist-description">Description</label><input id="gist-description" type="text" placeholder="R analysis from webR Studio">
+        <div class="segmented-control" role="group" aria-label="Gist visibility"><label><input type="radio" name="gist-visibility" value="private" checked><span>Secret</span></label><label><input type="radio" name="gist-visibility" value="public"><span>Public</span></label></div>
+        <div id="gist-file-list" class="check-list"></div>
+        <div class="dialog-footer"><button class="button secondary" value="cancel">Cancel</button><button id="publish-gist-button" type="button" class="button primary"><svg class="ui-icon"><use href="#i-github"></use></svg>Publish gist</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog confirm-dialog">
+    <form method="dialog" class="dialog-frame">
+      <header class="dialog-header"><div><h2 id="confirm-title">Confirm action</h2><p id="confirm-message">This action cannot be undone.</p></div></header>
+      <div class="dialog-footer"><button id="confirm-cancel" class="button secondary" value="cancel">Cancel</button><button id="confirm-accept" type="button" class="button danger">Continue</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="input-dialog" class="dialog confirm-dialog">
+    <form method="dialog" class="dialog-frame">
+      <header class="dialog-header"><div><h2 id="input-title">Enter a value</h2><p id="input-message"></p></div></header>
+      <div class="dialog-content"><input id="input-dialog-value" type="text"></div>
+      <div class="dialog-footer"><button class="button secondary" value="cancel">Cancel</button><button id="input-dialog-accept" type="button" class="button primary">Continue</button></div>
+    </form>
+  </dialog>
+
+  <template id="console-entry-template">
+    <article class="console-entry">
+      <header><span class="console-entry-icon"></span><span class="console-entry-label"></span><time></time><div class="console-entry-actions"></div></header>
+      <pre class="console-entry-body"></pre>
+    </article>
+  </template>
+
+  <script type="module" src="js/app.js?v=1.2.4"></script>
+</body>
+</html>
