@@ -55,7 +55,10 @@ export class ConsoleManager extends EventTarget {
     this.historyIndex = 0;
     this.historyDraft = '';
     this.transcript = [];
+    this.theme = 'crimson_editor';
     this.busy = false;
+    // Invalidates stale submit-finally handlers when the runtime is restarted.
+    this.submissionEpoch = 0;
     // Rendering command syntax highlighting is asynchronous. Keep output
     // writes ordered, while an epoch invalidates work queued before Clear.
     this.renderEpoch = 0;
@@ -262,8 +265,13 @@ export class ConsoleManager extends EventTarget {
   }
 
   async setTheme(theme) {
-    if (!this.editor) return;
-    try { await this.editor.setTheme(`ace/theme/${theme}`); } catch { /* The editor keeps its current theme. */ }
+    const nextTheme = theme || 'crimson_editor';
+    const changed = this.theme !== nextTheme;
+    this.theme = nextTheme;
+    if (this.editor) {
+      try { await this.editor.setTheme(`ace/theme/${nextTheme}`); } catch { /* The editor keeps its current theme. */ }
+    }
+    if (changed && this.transcript.length) await this.renderTranscript();
   }
 
   getValue() { return this.editor ? this.editor.getValue() : this.fallback.value; }
@@ -299,16 +307,20 @@ export class ConsoleManager extends EventTarget {
 
   async submit() {
     if (this.busy) return;
-    const code = this.getValue().trimEnd();
+    const code = this.getValue().replace(/\r\n?|\u2028|\u2029/g, '\n').trimEnd();
     if (!code.trim()) return;
-    this.pushHistory(code);
-    this.setValue('');
-    await this.appendEntry('command', code, { persist: true });
+    const submission = ++this.submissionEpoch;
     this.busy = true;
-    this.setReadOnly(true);
     try {
+      this.pushHistory(code);
+      this.setValue('');
+      this.setReadOnly(true);
+      await this.appendEntry('command', code, { persist: true });
       await this.callbacks.onSubmit?.(code);
     } finally {
+      // A runtime restart explicitly resets the editor and advances the epoch.
+      // Do not let a stale submission re-lock or unlock a newer submission.
+      if (submission !== this.submissionEpoch) return;
       this.busy = false;
       this.setReadOnly(false);
       this.focus();
@@ -349,10 +361,22 @@ export class ConsoleManager extends EventTarget {
     else this.fallback.disabled = readOnly;
   }
 
+  resetExecutionState({ focus = false } = {}) {
+    this.submissionEpoch += 1;
+    this.busy = false;
+    this.setReadOnly(false);
+    if (focus) this.focus();
+  }
+
   async appendExecution(result, { showTiming = this.settings.timing, showTraceback = this.settings.autoTraceback } = {}) {
     for (const group of groupedOutputs(result.outputs || [])) await this.appendEntry(group.type, group.text, { persist: true });
     for (const plot of result.plots || []) this.callbacks.onPlot?.(plot);
-    if (!result.ok && showTraceback && result.traceback?.length) {
+    if (result.interrupted) {
+      await this.appendEntry('info', 'Execution interrupted.', { persist: true });
+    } else if (result.interruptLate) {
+      await this.appendEntry('info', 'The expression had already finished before the interrupt reached R.', { persist: true });
+    }
+    if (!result.ok && !result.interrupted && showTraceback && result.traceback?.length) {
       await this.appendEntry('traceback', result.traceback.join('\n'), { persist: true });
     }
     if (showTiming) await this.appendEntry('timing', `Elapsed: ${formatDuration(result.elapsed)}`, { persist: true });
@@ -397,8 +421,13 @@ export class ConsoleManager extends EventTarget {
         session.current = { type, entry: replacement };
         return replacement;
       }
-      entry.text += `${entry.text || text ? '\n' : ''}${text}`;
-      body.textContent = entry.text;
+      const addition = `${entry.text || text ? '\n' : ''}${text}`;
+      entry.text += addition;
+      if (typeof body.append === 'function' && globalThis.document?.createTextNode) {
+        body.append(document.createTextNode(addition));
+      } else {
+        body.textContent = entry.text;
+      }
       this.callbacks.onTranscriptChange?.(this.transcript);
       if (this.settings.consoleFollow) this.output.scrollTop = this.output.scrollHeight;
       return entry;
@@ -473,7 +502,7 @@ export class ConsoleManager extends EventTarget {
     const body = document.createElement('pre');
     body.className = 'console-entry-body';
     if (entry.type === 'command') {
-      body.innerHTML = await EditorManager.highlightR(entry.text);
+      body.innerHTML = await EditorManager.highlightR(entry.text, this.theme);
     } else {
       body.textContent = entry.text;
     }

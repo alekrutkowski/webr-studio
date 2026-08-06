@@ -1068,15 +1068,27 @@ export class EditorManager extends EventTarget {
 
   resize() { this.editor?.resize(true); }
 
-  static async highlightR(code) {
+  static async highlightR(code, themeName = 'crimson_editor') {
     if (!globalThis.ace) return `<code>${escapeHtml(code)}</code>`;
     try {
       const ace = globalThis.ace;
       ace.config.set('basePath', ACE_CDN);
       const highlighter = await new Promise(resolve => ace.config.loadModule('ace/ext/static_highlight', resolve));
-      const mode = ace.require('ace/mode/r').Mode;
-      const theme = ace.require('ace/theme/crimson_editor') || ace.require('ace/theme/textmate');
-      return highlighter.render(code, new mode(), theme, 1, true).html;
+      const highlighted = await new Promise((resolve, reject) => {
+        try {
+          highlighter.render(
+            code,
+            'ace/mode/r',
+            `ace/theme/${themeName || 'crimson_editor'}`,
+            1,
+            true,
+            resolve
+          );
+        } catch (error) {
+          reject(error);
+        }
+      });
+      return highlighted.html;
     } catch {
       return `<code>${escapeHtml(code)}</code>`;
     }

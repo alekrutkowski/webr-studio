@@ -12,7 +12,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preconnect" href="https://webr.r-wasm.org" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=1.2.6">
+  <link rel="stylesheet" href="styles.css?v=1.2.9">
   <script src="coi-serviceworker.js"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict/ace.js"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js"></script>
@@ -285,6 +285,7 @@
           <div class="pane-tabs-row">
             <div class="tabs compact-tabs dock-tabs" data-dock-tabs="top" role="tablist">
               <button class="tab active" draggable="true" data-panel="environment">Environment</button>
+              <button class="tab" draggable="true" data-panel="files">Files <span id="runtime-file-count" class="badge count">0</span></button>
               <button class="tab" draggable="true" data-panel="outline">Outline</button>
               <button class="tab" draggable="true" data-panel="packages">Packages</button>
             </div>
@@ -301,6 +302,15 @@
                 <button id="environment-clean-button" class="button danger-ghost compact" title="Remove all objects"><svg class="ui-icon"><use href="#i-trash"></use></svg><span>Clear all</span></button>
               </div>
               <div id="environment-table" class="environment-table empty-state"><svg class="ui-icon"><use href="#i-box"></use></svg><p>The global environment is empty.</p></div>
+            </section>
+            <section id="panel-files" class="panel-view" data-panel-view="files">
+              <div class="panel-toolbar runtime-files-toolbar">
+                <button id="runtime-files-up" class="mini-icon" type="button" title="Parent directory" aria-label="Open parent directory"><svg class="ui-icon rotate-up"><use href="#i-chevron"></use></svg></button>
+                <button id="runtime-files-home" class="mini-icon" type="button" title="Open /project" aria-label="Open project directory"><svg class="ui-icon"><use href="#i-folder"></use></svg></button>
+                <div class="input-with-icon small flex-fill runtime-files-path"><svg class="ui-icon"><use href="#i-file"></use></svg><input id="runtime-files-path" type="text" value="/project" spellcheck="false" aria-label="Runtime filesystem path"></div>
+                <button id="runtime-files-refresh" class="mini-icon" type="button" title="Refresh runtime files" aria-label="Refresh runtime files"><svg class="ui-icon"><use href="#i-refresh"></use></svg></button>
+              </div>
+              <div id="runtime-files-list" class="runtime-files-list empty-state"><svg class="ui-icon"><use href="#i-folder"></use></svg><p>Runtime files will appear after R starts.</p></div>
             </section>
             <section id="panel-outline" class="panel-view" data-panel-view="outline">
               <div class="panel-toolbar"><div class="input-with-icon small"><svg class="ui-icon"><use href="#i-search"></use></svg><input id="outline-filter" type="search" placeholder="Filter symbols"></div></div>
@@ -442,6 +452,7 @@
 
           <section class="settings-section" data-settings-view="execution">
             <h3>R execution</h3>
+            <div class="setting-row"><div><label for="webr-version-input">webR runtime version</label><p>Use <code>latest</code> or a release such as <code>0.6.0</code>. Applying a version restarts the R worker.</p></div><div class="inline-inputs runtime-version-control"><input id="webr-version-input" type="text" list="webr-version-options" inputmode="text" autocomplete="off" spellcheck="false" aria-label="webR runtime version"><datalist id="webr-version-options"></datalist><button id="apply-webr-version" type="button" class="button secondary compact">Restart R</button></div></div>
             <div class="setting-row"><div><label for="pipe-select">Ctrl+Shift+M pipe</label><p>Insert the native or magrittr pipe in editor and console.</p></div><select id="pipe-select"><option value="|>">Native |&gt;</option><option value="%>%">magrittr %&gt;%</option></select></div>
             <div class="setting-row"><div><label for="timing-toggle-setting">Measure execution time</label><p>Show wall-clock time beneath each expression.</p></div><label class="switch"><input id="timing-toggle-setting" type="checkbox"><span></span></label></div>
             <div class="setting-row"><div><label for="checkpoint-toggle">Checkpoint environment</label><p>Save .RData after successful top-level console executions.</p></div><label class="switch"><input id="checkpoint-toggle" type="checkbox"><span></span></label></div>
@@ -512,6 +523,6 @@
     </article>
   </template>
 
-  <script type="module" src="js/app.js?v=1.2.6"></script>
+  <script type="module" src="js/app.js?v=1.2.9"></script>
 </body>
 </html>

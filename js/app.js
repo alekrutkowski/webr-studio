@@ -1,9 +1,11 @@
 import {
   APP_VERSION, DEFAULT_SETTINGS, MAX_EDITOR_BYTES, MAX_FILE_BYTES,
-  MAX_URL_STATE_CHARS, SAMPLE_FILES
+  MAX_URL_STATE_CHARS, SAMPLE_FILES, WEBR_VERSION_SUGGESTIONS, normalizeWebRVersion
 } from './config.js';
 import { workspaceDB } from './db.js';
-import { WebREngine, describeRuntime, environmentTypeLabel } from './webr-engine.js';
+import {
+  WebREngine, describeRuntime, environmentTypeLabel, normalizeVirtualPath, stripTerminalControlSequences
+} from './webr-engine.js';
 import { EditorManager } from './editor.js';
 import { ConsoleManager } from './console.js';
 import { DataViewer } from './data-viewer.js';
@@ -39,7 +41,7 @@ p{margin:.8em 0}a{color:var(--accent);text-decoration:none}a:hover{text-decorati
 ul,ol{margin:.75em 0;padding-left:1.7em}li+li{margin-top:.25em}blockquote{margin:1em 0;padding:.25em 1em;border-left:4px solid var(--accent);color:var(--muted);background:#fff9fb}
 hr{margin:1.8em 0;border:0;border-top:1px solid var(--border)}code,pre{font-family:"Ubuntu Mono","Cascadia Code",Consolas,monospace}code{padding:.12em .34em;border-radius:4px;background:var(--soft);font-size:.92em}pre{overflow:auto;margin:1em 0;padding:14px 16px;border:1px solid var(--border);border-radius:8px;background:var(--soft);font-size:13px;line-height:1.5}pre code{padding:0;background:transparent}
 table{width:100%;margin:1em 0;border-collapse:collapse}th,td{padding:8px 10px;border:1px solid var(--border);text-align:left;vertical-align:top}th{background:var(--soft);font-weight:680}
-img,svg{display:block;max-width:100%;height:auto;margin-inline:auto}.math-display{margin:1.1em 0;overflow:auto;text-align:center}.math-inline{display:inline-block;vertical-align:-.08em}math{font-size:1.04em}
+img,svg{display:block;max-width:100%;height:auto;margin-inline:auto}.math-display{margin:1.1em 0;overflow-x:auto;overflow-y:hidden;text-align:center}.math-inline{display:inline-block;vertical-align:-.08em}math{font-size:1.04em}
 .r-chunk{margin:16px 0;border:1px solid var(--border);border-radius:9px;overflow:hidden}.r-chunk-header{display:flex;justify-content:space-between;gap:12px;padding:7px 10px;background:var(--soft);color:var(--muted);font-size:11px;font-weight:650}.r-chunk-source{margin:0;border:0;border-radius:0}.r-chunk-output{overflow:auto;margin:0;padding:8px 11px;border:0;border-top:1px solid var(--border);border-radius:0;white-space:pre;overflow-wrap:normal;tab-size:4;font:13px/1.35 "Ubuntu Mono","Cascadia Code",Consolas,monospace}.r-chunk-output.output-error{color:var(--danger);background:#fff3f4}.r-chunk-output.output-warning{color:var(--warning);background:#fff8ec}.r-chunk-output.output-message,.r-chunk-output.output-traceback{color:#334155;background:#f8fafc}.r-chunk-plot{margin:0;padding:12px;border-top:1px solid var(--border);background:#fff}.r-chunk-asis{padding:8px 11px;border-top:1px solid var(--border);background:#fff}.r-chunk-asis>:first-child{margin-top:0}.r-chunk-asis>:last-child{margin-bottom:0}.r-chunk-plot{display:block;box-sizing:border-box;width:auto;max-width:100%}.r-chunk-plot.align-left{margin-right:auto;margin-left:0}.r-chunk-plot.align-center{margin-right:auto;margin-left:auto}.r-chunk-plot.align-right{margin-right:0;margin-left:auto}.r-chunk-plot svg,.r-chunk-plot img{display:block;width:100%;max-width:100%;height:auto;margin:0 auto}.r-chunk-plot.has-output-height svg,.r-chunk-plot.has-output-height img{height:100%;object-fit:contain}.r-chunk-plot figcaption{margin-top:7px;color:var(--muted);font-size:12px;line-height:1.45;text-align:center}.r-plot-svg{color:#000;fill:#000;stroke:none;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter}.inline-r-output{display:inline;padding:0 .12em;border-radius:3px;background:#fff3f7}.inline-r-error{display:inline;padding:0 .2em;border-radius:3px;color:var(--danger);background:#fff1f2;font:13px "Ubuntu Mono","Cascadia Code",Consolas,monospace}.render-notice{margin:0 0 1em;padding:10px 12px;border:1px solid #f4c26b;border-radius:8px;background:#fff8e8;color:#6f4200}.missing-asset{display:block;padding:10px;border:1px dashed var(--border);color:var(--muted);background:var(--soft)}.embedded-svg{display:block;max-width:100%}
 .ace_keyword,.ace_storage,.ace_support.ace_type{color:#9f1239;font-weight:650}.ace_string{color:#34743f}.ace_comment{color:#777;font-style:italic}.ace_constant.ace_numeric{color:#1d5d9a}.ace_support.ace_function,.ace_entity.ace_name.ace_function{color:#075c73}.ace_variable{color:#3c315e}
 @media(max-width:720px){html{background:#fff}.document{width:100%;margin:0;padding:28px 20px;border:0;border-radius:0;box-shadow:none}h1{font-size:1.75em}h2{font-size:1.42em}}
@@ -62,6 +64,12 @@ function parseViewPayload(text = '') {
   } catch {
     return { name: encodedName, title: encodedTitle || encodedName };
   }
+}
+
+function conciseRVersion(value = '') {
+  const text = String(value || '').trim();
+  const match = text.match(/(?:R version\s+)?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)/i);
+  return match?.[1] || text.replace(/^R\s+/i, '');
 }
 
 function splitDocumentFrontMatter(source = '') {
@@ -103,6 +111,8 @@ function svg(id, className = '') {
 function deepSettings(stored = {}) {
   const migrated = { ...stored };
   if (migrated.printMargin == null && migrated.minimap != null) migrated.printMargin = Boolean(migrated.minimap);
+  try { migrated.webrVersion = normalizeWebRVersion(migrated.webrVersion); }
+  catch { migrated.webrVersion = DEFAULT_SETTINGS.webrVersion; }
   delete migrated.minimap;
   return {
     ...DEFAULT_SETTINGS,
@@ -181,6 +191,12 @@ class WebRStudioApp {
     this.maximizedPaneId = '';
     this.previewPath = '';
     this.environmentError = '';
+    this.runtimeFilesPath = '/project';
+    this.runtimeFiles = [];
+    this.runtimeFilesError = '';
+    this.runtimeFilesLoading = false;
+    this.runtimeFilesRefreshPending = true;
+    this.runtimeFilesRequest = 0;
     this.pendingMirrors = new Set();
     this.pendingMirrorDeletes = new Set();
     this.fileSaveQueues = new Map();
@@ -350,6 +366,7 @@ class WebRStudioApp {
     this.setRuntimeState('loading', 'Starting R…');
     try {
       await this.engine.initialize({
+        version: this.settings.webrVersion,
         plotWidth: this.settings.plotWidth,
         plotHeight: this.settings.plotHeight,
         onProgress: (progress, message) => this.setBoot(18 + progress * .66, message)
@@ -368,8 +385,12 @@ class WebRStudioApp {
           });
         }
       }
-      await Promise.all([this.refreshEnvironment(), this.refreshPackages()]);
-      this.setRuntimeState('ready', 'R ready');
+      await Promise.all([
+        this.refreshEnvironment(),
+        this.refreshPackages(),
+        this.refreshRuntimeFiles('/project', { quiet: true })
+      ]);
+      this.setRuntimeState('ready', this.runtimeReadyLabel());
       this.setBoot(100, 'Ready');
       this.showWorkbench();
       this.lastPlotDeviceSize = null;
@@ -377,7 +398,7 @@ class WebRStudioApp {
       this.pendingPlotReflow = true;
       requestAnimationFrame(() => this.plotResizeDebounced());
       if (!globalThis.crossOriginIsolated) {
-        this.ui.toast('Limited interrupt support', 'Reload once after the isolation service worker activates. Hard restart remains available.', 'warning', 9000);
+        this.ui.toast('Limited interrupt support', 'Stop cannot interrupt this PostMessage session. Reload once after the isolation service worker activates; the app will not restart R automatically.', 'warning', 9000);
       }
     } catch (error) {
       this.runtimeAvailable = false;
@@ -428,6 +449,7 @@ class WebRStudioApp {
     this.editor?.setTheme(editorTheme);
     this.console?.setTheme(editorTheme);
     $('#theme-button use')?.setAttribute('href', resolved === 'light' ? '#i-sun' : '#i-moon');
+    $('#theme-button').title = resolved === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
     $('#font-status').textContent = `${this.settings.fontFamily} ${this.settings.fontSize}`;
     $('#pipe-status').textContent = `Pipe: ${this.settings.pipe}`;
     $('#indent-mode-button').textContent = `Spaces: ${this.settings.tabSize}`;
@@ -461,6 +483,12 @@ class WebRStudioApp {
     on('#source-options-button', 'click', event => this.showSourceOptionsMenu(event.currentTarget));
     on('#stop-button', 'click', () => this.stopExecution());
     on('#restart-r-button', 'click', () => this.restartRuntime(true));
+    on('#apply-webr-version', 'click', () => this.applyWebRVersion());
+    on('#webr-version-input', 'keydown', event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      this.applyWebRVersion();
+    });
     on('#check-code-button', 'click', () => this.checkCodeWithMistral());
     on('#timing-button', 'click', () => this.updateSetting('timing', !this.settings.timing));
     on('#theme-button', 'click', () => this.cycleTheme());
@@ -515,6 +543,14 @@ class WebRStudioApp {
     on('#environment-filter', 'input', () => this.renderEnvironment());
     on('#outline-filter', 'input', () => this.renderOutline());
     on('#package-filter', 'input', this.packageFilterDebounced);
+    on('#runtime-files-up', 'click', () => this.refreshRuntimeFiles(this.runtimeFilesParent(this.runtimeFilesPath)));
+    on('#runtime-files-home', 'click', () => this.refreshRuntimeFiles('/project'));
+    on('#runtime-files-refresh', 'click', () => this.refreshRuntimeFiles(this.runtimeFilesPath));
+    on('#runtime-files-path', 'keydown', event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      this.refreshRuntimeFiles(event.currentTarget.value);
+    });
 
     on('#gist-token', 'input', this.gistTokenDebounced);
     on('#persist-gist-token', 'change', () => this.persistGistToken());
@@ -566,9 +602,17 @@ class WebRStudioApp {
 
     this.engine.addEventListener('state', event => {
       const state = event.detail.state;
-      if (state === 'running') this.setRuntimeState('running', 'R running…');
+      if (state === 'running') {
+        const phase = event.detail.phase || '';
+        const label = phase === 'preparing'
+          ? 'Preparing R…'
+          : phase === 'finalizing'
+            ? 'R finalizing output…'
+            : 'R running…';
+        this.setRuntimeState('running', label, { canStop: phase === 'evaluating' });
+      }
       else if (state === 'ready') {
-        this.setRuntimeState('ready', 'R ready');
+        this.setRuntimeState('ready', this.runtimeReadyLabel());
         if (this.pendingPlotReflow) requestAnimationFrame(() => this.plotResizeDebounced());
       }
       else if (state === 'restarting') this.setRuntimeState('loading', 'Restarting R…');
@@ -625,6 +669,7 @@ class WebRStudioApp {
         { label: 'Command palette', icon: 'i-command', shortcut: 'Ctrl Shift P', action: () => this.openCommandPalette() },
         { label: 'Explorer', icon: 'i-file', action: () => this.activateSidebar('explorer') },
         { label: 'Environment', icon: 'i-box', action: () => this.activatePanel('environment') },
+        { label: 'Runtime files', icon: 'i-folder', action: () => this.activatePanel('files') },
         { label: 'Packages', icon: 'i-box', action: () => this.activatePanel('packages') },
         { label: 'Plots', icon: 'i-chart', action: () => this.activatePanel('plots') },
         { label: 'Help', icon: 'i-help', action: () => this.activatePanel('help') },
@@ -684,6 +729,7 @@ class WebRStudioApp {
     this.renderProblems();
     this.renderOutline();
     this.renderEnvironment();
+    this.renderRuntimeFiles();
     this.renderPackages();
     this.renderPlots();
     this.renderSnapshots();
@@ -882,6 +928,7 @@ class WebRStudioApp {
         try {
           await this.engine.mirrorFile(path, content);
           this.pendingMirrors.delete(path);
+          this.runtimeFilesRefreshPending = true;
         } catch (error) {
           mirrorError = error;
           this.pendingMirrors.add(path);
@@ -925,10 +972,12 @@ class WebRStudioApp {
   async flushPendingMirrors() {
     if (!this.engine.ready || this.engine.running) return;
     const failures = [];
+    let changed = false;
     for (const path of [...this.pendingMirrorDeletes]) {
       try {
         await this.engine.removeMirroredFile(path);
         this.pendingMirrorDeletes.delete(path);
+        changed = true;
       } catch (error) {
         failures.push(`${path}: ${error.message || String(error)}`);
       }
@@ -942,6 +991,7 @@ class WebRStudioApp {
       try {
         await this.engine.mirrorFile(path, file.content);
         this.pendingMirrors.delete(path);
+        changed = true;
       } catch (error) {
         failures.push(`${path}: ${error.message || String(error)}`);
       }
@@ -955,6 +1005,7 @@ class WebRStudioApp {
         7000
       );
     }
+    if (changed) this.runtimeFilesRefreshPending = true;
   }
 
   async mirrorFilesWhenIdle(files) {
@@ -1286,6 +1337,10 @@ class WebRStudioApp {
     });
     await this.flushPendingMirrors();
     await this.refreshEnvironment({ retry: true });
+    this.runtimeFilesRefreshPending = true;
+    if ($('#panel-files')?.classList.contains('active')) {
+      await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
+    }
     if (result.ok && this.settings.checkpointEnvironment) this.checkpointDebounced();
     if (!result.ok) this.console.focus();
     return result;
@@ -1315,8 +1370,35 @@ class WebRStudioApp {
       await this.flushPendingMirrors();
       await this.syncPlotDeviceToViewer({ reflowCurrent: false });
       if (echo) await this.console.appendEntry('command', source, { persist: true });
-      const result = await this.engine.execute(source);
-      return await this.finalizeExecution(result);
+      const stream = this.console.beginStream();
+      const pendingViews = [];
+      let streamedConsoleOutput = false;
+      let result;
+      try {
+        result = await this.engine.execute(source, {
+          onOutput: async item => {
+            if (item.type === 'view') {
+              const request = parseViewPayload(item.text);
+              if (request.name) pendingViews.push(request);
+              return;
+            }
+            streamedConsoleOutput = true;
+            await this.console.appendStreamItem(stream, item);
+          }
+        });
+      } finally {
+        this.console.endStream(stream);
+      }
+      result.streamed = streamedConsoleOutput;
+      if (result.cancelled) return result;
+      const finalized = await this.finalizeExecution(result);
+      // Fetch Viewer data only after the REPL has returned. Querying R from a
+      // View() stream callback would pause output consumption while R is busy.
+      for (const request of pendingViews) {
+        this.activatePanel('data');
+        await this.dataViewer?.openObject(request.name, request.title || request.name);
+      }
+      return finalized;
     } catch (error) {
       this.ui.toast('R execution could not start', error.message || String(error), 'error', 0);
       await this.console.appendEntry('error', error.message || String(error), { persist: true });
@@ -1359,6 +1441,7 @@ class WebRStudioApp {
       } finally {
         this.console.endStream(stream);
       }
+      if (result.cancelled) return result;
       const finalized = await this.finalizeExecution(result);
       // Fetch Viewer data only after the REPL has returned. Querying R from a
       // View() stream callback would pause output consumption while R is busy.
@@ -1387,16 +1470,59 @@ class WebRStudioApp {
   async stopExecution() {
     if (!this.engine.running) return;
     $('#stop-button').disabled = true;
-    const interrupted = await this.engine.interrupt();
-    if (interrupted) {
-      await this.console.appendEntry('warning', 'Interrupt requested. R will stop at the next interrupt check.', { persist: true });
-    } else {
-      await this.console.appendEntry('warning', 'This browser channel could not interrupt safely. Restarting the R worker and restoring the latest checkpoint.', { persist: true });
-      await this.restartRuntime(false);
+    const request = this.engine.requestInterrupt();
+    if (request.ok) {
+      if (request.reason === 'requested') {
+        await this.console.appendEntry(
+          'message',
+          'Interrupt requested. The current R session and its objects will be preserved.',
+          { persist: true }
+        );
+      }
+      return;
     }
+
+    if (request.reason === 'preparing') {
+      $('#stop-button').disabled = false;
+      this.ui.toast('R is preparing the command', 'The interrupt was not sent before user-code evaluation began. Press Stop again once R is running.', 'info', 5000);
+      return;
+    }
+
+    if (request.reason === 'finishing') {
+      await this.console.appendEntry(
+        'info',
+        'R has already finished evaluating the expression and is finalizing its output. No interrupt was sent.',
+        { persist: true }
+      );
+      return;
+    }
+
+    if (request.reason === 'unsupported') {
+      // PostMessage cannot interrupt running R code. Never replace the worker as
+      // an implicit Stop fallback because doing so destroys the user's R state.
+      $('#stop-button').disabled = false;
+      await this.console.appendEntry(
+        'warning',
+        'State-preserving interruption is unavailable in this session. The current command will continue, and the R worker was not restarted.',
+        { persist: true }
+      );
+      this.ui.toast(
+        'R could not be interrupted',
+        'This page is using webR’s PostMessage channel. Reload after cross-origin isolation becomes active, or serve the app with COOP and COEP headers.',
+        'warning',
+        9000
+      );
+      return;
+    }
+
+    $('#stop-button').disabled = false;
+    this.ui.toast('R could not be interrupted', request.error?.message || 'The interrupt request failed.', 'error', 7000);
   }
 
-  async restartRuntime(confirm = false) {
+
+  async restartRuntime(confirm = false, {
+    version = this.settings.webrVersion
+  } = {}) {
     if (confirm) {
       const accepted = await this.ui.confirm(
         'Restart webR?',
@@ -1405,10 +1531,13 @@ class WebRStudioApp {
       );
       if (!accepted) return;
     }
+    this.console?.resetExecutionState();
     try {
       if (this.engine.ready && this.settings.checkpointEnvironment && !this.engine.running) await this.saveRCheckpoint();
+      const requestedVersion = normalizeWebRVersion(version);
       this.setRuntimeState('loading', 'Restarting R…');
       await this.engine.restart({
+        version: requestedVersion,
         plotWidth: this.settings.plotWidth,
         plotHeight: this.settings.plotHeight,
         onProgress: (_progress, message) => this.setRuntimeState('loading', message)
@@ -1421,31 +1550,57 @@ class WebRStudioApp {
         if (checkpoint?.length || checkpoint?.byteLength) await this.engine.restoreEnvironment(checkpoint);
       }
       this.runtimeAvailable = true;
-      await Promise.all([this.refreshEnvironment(), this.refreshPackages()]);
-      this.setRuntimeState('ready', 'R ready');
+      this.runtimeFilesPath = '/project';
+      this.runtimeFiles = [];
+      this.runtimeFilesError = '';
+      this.runtimeFilesRefreshPending = true;
+      await Promise.all([
+        this.refreshEnvironment(),
+        this.refreshPackages(),
+        this.refreshRuntimeFiles('/project', { quiet: true })
+      ]);
+      this.setRuntimeState('ready', this.runtimeReadyLabel());
       this.lastPlotDeviceSize = null;
       this.lastPlotViewerRect = null;
       this.pendingPlotReflow = true;
       requestAnimationFrame(() => this.plotResizeDebounced());
-      await this.console.appendEntry('success', `webR restarted. ${this.engine.rVersion}`, { persist: true });
+      await this.console.appendEntry(
+        'success',
+        `webR ${this.engine.version} restarted. ${this.engine.rVersion}`,
+        { persist: true }
+      );
+      return true;
     } catch (error) {
       this.runtimeAvailable = false;
       this.setRuntimeState('error', 'Restart failed');
       this.ui.toast('webR restart failed', error.message, 'error', 0);
+      return false;
+    } finally {
+      // A cancelled console submission may never settle against the old
+      // worker. Always restore editability after an explicit restart attempt.
+      this.console?.resetExecutionState();
     }
   }
 
-  setRuntimeState(state, label) {
+  runtimeReadyLabel() {
+    const version = conciseRVersion(this.engine.rVersion);
+    return version ? `R ready · R ${version}` : 'R ready';
+  }
+
+  setRuntimeState(state, label, { canStop = state === 'running' } = {}) {
     const status = $('#r-status');
     status.dataset.state = state;
     status.querySelector('.runtime-label').textContent = label;
     $('#runtime-status-detail').dataset.state = state === 'ready' ? 'ready' : state;
-    $('#stop-button').disabled = state !== 'running';
+    $('#stop-button').disabled = state !== 'running' || !canStop;
     const sourceable = Boolean(this.activePath && extname(this.activePath) === 'r');
     $('#run-selection-button').disabled = state !== 'ready' || !this.activePath;
     $('#run-script-button').disabled = state !== 'ready' || !sourceable;
     $('#source-options-button').disabled = state !== 'ready' || !sourceable;
     $('#restart-r-button').disabled = state === 'loading';
+    $('#apply-webr-version').disabled = state === 'loading' || state === 'running';
+    $('#webr-version-input').disabled = state === 'loading' || state === 'running';
+    this.renderRuntimeFiles();
   }
 
   async showRuntimeInfo() {
@@ -1599,6 +1754,170 @@ class WebRStudioApp {
     }
   }
 
+  runtimeFilesParent(path = this.runtimeFilesPath) {
+    const normalized = normalizeVirtualPath(path);
+    if (normalized === '/') return '/';
+    const parent = normalized.split('/').slice(0, -1).join('/');
+    return parent || '/';
+  }
+
+  async refreshRuntimeFiles(path = this.runtimeFilesPath, { quiet = false } = {}) {
+    const target = normalizeVirtualPath(path);
+    if (!this.engine.ready) {
+      this.runtimeFilesRefreshPending = true;
+      this.runtimeFilesPath = target;
+      this.runtimeFilesError = '';
+      this.renderRuntimeFiles();
+      if (!quiet) this.ui.toast('R is offline', 'Start webR before browsing its virtual filesystem.', 'warning');
+      return null;
+    }
+    if (this.engine.running) {
+      this.runtimeFilesRefreshPending = true;
+      if (!quiet) this.ui.toast('R is busy', 'Runtime files can be refreshed after the current expression finishes.', 'warning');
+      this.renderRuntimeFiles();
+      return null;
+    }
+
+    const request = ++this.runtimeFilesRequest;
+    this.runtimeFilesLoading = true;
+    this.runtimeFilesError = '';
+    this.renderRuntimeFiles();
+    try {
+      const listing = await this.engine.listVirtualFiles(target);
+      if (request !== this.runtimeFilesRequest) return null;
+      this.runtimeFilesPath = listing.path;
+      this.runtimeFiles = listing.entries;
+      this.runtimeFilesRefreshPending = false;
+      return listing;
+    } catch (error) {
+      if (request !== this.runtimeFilesRequest) return null;
+      this.runtimeFilesPath = target;
+      this.runtimeFiles = [];
+      this.runtimeFilesError = error.message || String(error);
+      this.runtimeFilesRefreshPending = true;
+      if (!quiet) this.ui.toast('Could not open runtime directory', this.runtimeFilesError, 'error');
+      return null;
+    } finally {
+      if (request === this.runtimeFilesRequest) {
+        this.runtimeFilesLoading = false;
+        this.renderRuntimeFiles();
+      }
+    }
+  }
+
+  renderRuntimeFiles() {
+    const container = $('#runtime-files-list');
+    if (!container) return;
+    const pathInput = $('#runtime-files-path');
+    const count = $('#runtime-file-count');
+    const busy = Boolean(this.engine.running || this.runtimeFilesLoading);
+    const interactive = Boolean(this.engine.ready && !busy);
+    pathInput.value = this.runtimeFilesPath;
+    pathInput.disabled = !interactive;
+    $('#runtime-files-up').disabled = !interactive || this.runtimeFilesPath === '/';
+    $('#runtime-files-home').disabled = !interactive || this.runtimeFilesPath === '/project';
+    $('#runtime-files-refresh').disabled = !interactive;
+    count.textContent = String(this.runtimeFiles.length);
+
+    if (this.runtimeFilesLoading) {
+      container.className = 'runtime-files-list empty-state';
+      container.innerHTML = `${svg('i-refresh', 'spin')}<p>Reading ${escapeHtml(this.runtimeFilesPath)}…</p>`;
+      return;
+    }
+    if (!this.engine.ready) {
+      container.className = 'runtime-files-list empty-state';
+      container.innerHTML = `${svg('i-folder')}<p>Runtime files will appear after R starts.</p>`;
+      return;
+    }
+    if (this.runtimeFilesError) {
+      container.className = 'runtime-files-list empty-state';
+      container.innerHTML = `${svg('i-folder')}<p>Could not open this directory.<br><small>${escapeHtml(this.runtimeFilesError)}</small></p><button type="button" class="button secondary compact">Retry</button>`;
+      container.querySelector('button').disabled = busy;
+      container.querySelector('button').addEventListener('click', () => this.refreshRuntimeFiles(this.runtimeFilesPath));
+      return;
+    }
+    if (!this.runtimeFiles.length) {
+      container.className = 'runtime-files-list empty-state';
+      container.innerHTML = `${svg('i-folder')}<p>${busy ? 'R is running. The last file listing will refresh when it finishes.' : 'This runtime directory is empty.'}</p>`;
+      return;
+    }
+
+    container.className = 'runtime-files-list';
+    container.replaceChildren();
+    const header = document.createElement('div');
+    header.className = 'runtime-file-header';
+    header.innerHTML = '<span></span><span>Name</span><span>Size</span><span>Modified</span><span></span>';
+    container.append(header);
+    for (const entry of this.runtimeFiles) {
+      const row = document.createElement('div');
+      row.className = `runtime-file-row${entry.isDirectory ? ' directory' : ''}`;
+      row.dataset.path = entry.path;
+
+      const icon = document.createElement('span');
+      icon.className = 'runtime-file-icon';
+      icon.innerHTML = svg(entry.isDirectory ? 'i-folder' : 'i-file');
+
+      const name = document.createElement('button');
+      name.type = 'button';
+      name.className = 'runtime-file-name';
+      name.textContent = entry.name;
+      name.title = entry.isDirectory ? `Open ${entry.path}` : `Download ${entry.path}`;
+      name.disabled = busy;
+      name.addEventListener('click', () => {
+        if (entry.isDirectory) this.refreshRuntimeFiles(entry.path);
+        else this.downloadRuntimeFile(entry);
+      });
+
+      const size = document.createElement('span');
+      size.className = 'runtime-file-size';
+      size.textContent = entry.isDirectory ? 'Folder' : formatBytes(entry.size);
+
+      const modified = document.createElement('span');
+      modified.className = 'runtime-file-modified';
+      modified.textContent = entry.modifiedAt ? formatDate(entry.modifiedAt) : '–';
+      modified.title = modified.textContent;
+
+      const actions = document.createElement('span');
+      actions.className = 'runtime-file-actions';
+      if (!entry.isDirectory) {
+        const download = document.createElement('button');
+        download.type = 'button';
+        download.className = 'mini-icon';
+        download.title = `Download ${entry.name}`;
+        download.setAttribute('aria-label', `Download ${entry.name}`);
+        download.innerHTML = svg('i-download');
+        download.disabled = busy;
+        download.addEventListener('click', event => {
+          event.stopPropagation();
+          this.downloadRuntimeFile(entry);
+        });
+        actions.append(download);
+      }
+      row.append(icon, name, size, modified, actions);
+      container.append(row);
+    }
+  }
+
+  async downloadRuntimeFile(entry) {
+    if (!entry || entry.isDirectory) return;
+    if (!this.requireIdleRuntime('Runtime file download', 'Start webR before downloading runtime files.')) return;
+    if (entry.size > MAX_FILE_BYTES) {
+      const accepted = await this.ui.confirm(
+        `Download ${entry.name}?`,
+        `This file is ${formatBytes(entry.size)} and must be copied from webR memory into browser memory before downloading.`,
+        { acceptLabel: 'Download' }
+      );
+      if (!accepted) return;
+    }
+    try {
+      const bytes = await this.engine.readVirtualFile(entry.path);
+      downloadBlob(new Blob([bytes], { type: mimeFromPath(entry.name) }), basename(entry.path));
+      this.ui.toast('Runtime file downloaded', `${entry.path} · ${formatBytes(bytes.byteLength)}`, 'success');
+    } catch (error) {
+      this.ui.toast('Runtime file download failed', error.message || String(error), 'error', 0);
+    }
+  }
+
   async refreshPackages() {
     if (!this.engine.ready || this.engine.running) return;
     try {
@@ -1665,6 +1984,7 @@ class WebRStudioApp {
 
   async refreshPanel(panel) {
     if (panel === 'environment') return this.refreshEnvironment({ retry: true });
+    if (panel === 'files') return this.refreshRuntimeFiles(this.runtimeFilesPath);
     if (panel === 'packages') return this.refreshPackages();
     if (panel === 'outline') return this.editor.updateOutline();
     if (panel === 'plots') {
@@ -2075,17 +2395,20 @@ class WebRStudioApp {
       if (kind === 'warning' && options.warning === false) return;
       const mode = resultMode(options);
       if (['stdout', 'stderr'].includes(item.type) && (mode === 'hide' || mode === 'false')) return;
-      if (item.type === 'stdout' && mode === 'asis') {
-        const output = document.createElement('div');
-        output.className = 'r-chunk-asis';
-        output.innerHTML = renderMarkdown(item.text || '');
-        renderMathInElement(output);
-        chunk.append(output);
-        return;
-      }
       const output = document.createElement('pre');
       output.className = `r-chunk-output output-${kind}`;
-      output.textContent = `${kind === 'warning' ? '⚠ ' : kind === 'error' ? '🧯 ' : kind === 'message' ? 'ℹ ' : ''}${item.text}`;
+      const text = stripTerminalControlSequences(item.text || '');
+      output.textContent = `${kind === 'warning' ? '⚠ ' : kind === 'error' ? '🧯 ' : kind === 'message' ? 'ℹ ' : ''}${text}`;
+      chunk.append(output);
+    };
+
+    const appendAsisOutput = (chunk, text) => {
+      const clean = stripTerminalControlSequences(text || '');
+      if (!clean) return;
+      const output = document.createElement('div');
+      output.className = 'r-chunk-asis';
+      output.innerHTML = renderMarkdown(clean);
+      renderMathInElement(output);
       chunk.append(output);
     };
 
@@ -2195,9 +2518,24 @@ class WebRStudioApp {
             plotWidth: figure.width,
             plotHeight: figure.height
           });
+          if (result.cancelled) return;
           await this.handleViewOutputs(result);
           if (include) {
-            for (const item of result.outputs || []) appendOutput(chunk, item, options);
+            const asis = [];
+            const flushAsis = () => {
+              if (!asis.length) return;
+              appendAsisOutput(chunk, asis.join('\n'));
+              asis.length = 0;
+            };
+            for (const item of result.outputs || []) {
+              if (item.type === 'stdout' && resultMode(options) === 'asis') {
+                asis.push(item.text || '');
+                continue;
+              }
+              flushAsis();
+              appendOutput(chunk, item, options);
+            }
+            flushAsis();
             if (!result.ok && result.traceback?.length) {
               const traceback = document.createElement('pre');
               traceback.className = 'r-chunk-output output-traceback';
@@ -2215,6 +2553,10 @@ class WebRStudioApp {
       renderMathInElement(preview);
       this.bindPreviewLinks(preview);
       await this.refreshEnvironment();
+      this.runtimeFilesRefreshPending = true;
+      if ($('#panel-files')?.classList.contains('active')) {
+        await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
+      }
       if (this.settings.checkpointEnvironment) this.checkpointDebounced();
     } catch (error) {
       const failure = document.createElement('section');
@@ -2444,6 +2786,9 @@ class WebRStudioApp {
     this.settings.activeDock[dock] = name;
     if (persist) this.persistSettingsDebounced();
     if (name === 'environment') this.refreshEnvironment();
+    if (name === 'files' && (this.runtimeFilesRefreshPending || !this.runtimeFiles.length)) {
+      this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
+    }
     if (name === 'packages') this.refreshPackages();
     if (name === 'plots') {
       this.renderPlots();
@@ -2644,7 +2989,7 @@ class WebRStudioApp {
 
   showDockOptionsMenu(anchor, dock) {
     const labels = {
-      environment: 'Environment', outline: 'Outline', packages: 'Packages',
+      environment: 'Environment', files: 'Runtime files', outline: 'Outline', packages: 'Packages',
       plots: 'Plots', help: 'Help', data: 'Data viewer', preview: 'Document preview'
     };
     const active = this.settings.activeDock[dock] || this.settings.dockPanels[dock]?.[0];
@@ -2653,7 +2998,7 @@ class WebRStudioApp {
       { type: 'label', label: `${dock === 'top' ? 'Upper' : 'Lower'} dock panels` },
       ...(this.settings.dockPanels[dock] || []).map(panel => ({
         label: labels[panel] || panel,
-        icon: panel === 'plots' ? 'i-chart' : panel === 'data' ? 'i-table' : panel === 'help' || panel === 'preview' ? 'i-book' : 'i-box',
+        icon: panel === 'plots' ? 'i-chart' : panel === 'data' ? 'i-table' : panel === 'files' ? 'i-folder' : panel === 'help' || panel === 'preview' ? 'i-book' : 'i-box',
         checked: panel === active,
         action: () => this.activatePanel(panel)
       })),
@@ -2766,6 +3111,12 @@ class WebRStudioApp {
   }
 
   bindSettingsControls() {
+    const versionOptions = $('#webr-version-options');
+    versionOptions.replaceChildren(...WEBR_VERSION_SUGGESTIONS.map(version => {
+      const option = document.createElement('option');
+      option.value = version;
+      return option;
+    }));
     const controls = {
       'theme-select': ['theme', 'string'],
       'editor-theme-select': ['editorTheme', 'string'],
@@ -2905,6 +3256,7 @@ class WebRStudioApp {
       'plot-height': this.settings.plotHeight,
       'autosave-delay': this.settings.autosaveDelay
     };
+    $('#webr-version-input').value = String(this.settings.webrVersion || '');
     for (const [id, value] of Object.entries(values)) {
       const element = $(`#${id}`);
       if (!element) continue;
@@ -2915,10 +3267,40 @@ class WebRStudioApp {
   }
 
   cycleTheme() {
-    const order = ['system', 'light', 'dark'];
-    const next = order[(order.indexOf(this.settings.theme) + 1) % order.length];
+    const resolved = document.documentElement.dataset.resolvedTheme ||
+      (this.systemTheme.matches ? 'dark' : 'light');
+    const next = resolved === 'light' ? 'dark' : 'light';
     this.updateSetting('theme', next);
-    this.ui.toast('Color theme', next === 'system' ? 'Following the operating system.' : `${next[0].toUpperCase()}${next.slice(1)} theme selected.`, 'info');
+    this.ui.toast('Color theme', `${next[0].toUpperCase()}${next.slice(1)} theme selected.`, 'info');
+  }
+
+  async applyWebRVersion() {
+    const input = $('#webr-version-input');
+    let requested;
+    try {
+      requested = normalizeWebRVersion(input.value);
+    } catch (error) {
+      input.setCustomValidity(error.message || String(error));
+      input.reportValidity();
+      input.setCustomValidity('');
+      return;
+    }
+
+    const previous = this.settings.webrVersion;
+    input.value = requested;
+    const restarted = await this.restartRuntime(false, { version: requested });
+    if (restarted) {
+      this.settings.webrVersion = requested;
+      await workspaceDB.set('settings', this.settings);
+      this.ui.toast('webR version applied', `Using webR ${this.engine.version}.`, 'success');
+      return;
+    }
+
+    input.value = previous;
+    if (requested !== previous) {
+      this.ui.toast('Restoring webR', `Could not start ${requested}. Restoring ${previous}.`, 'warning', 8000);
+      await this.restartRuntime(false, { version: previous });
+    }
   }
 
   async updateStorageEstimate() {
@@ -2946,6 +3328,7 @@ class WebRStudioApp {
       { title: 'Stop R execution', detail: 'Session', icon: 'i-stop', action: () => this.stopExecution() },
       { title: 'Clear global environment', detail: 'Session', icon: 'i-trash', action: () => this.clearEnvironment() },
       { title: 'Install R package', detail: 'Packages', icon: 'i-plus', action: () => this.installPackage() },
+      { title: 'Browse runtime files', detail: 'webR filesystem', icon: 'i-folder', action: () => this.activatePanel('files') },
       { title: 'Render Markdown or R Markdown', detail: 'Preview', icon: 'i-book', action: () => this.previewActiveFile() },
       { title: 'Share workspace as URL', detail: 'Workspace', icon: 'i-link', action: () => this.shareWorkspaceUrl() },
       { title: 'Export project JSON', detail: 'Workspace', icon: 'i-download', action: () => this.exportWorkspaceJson() },

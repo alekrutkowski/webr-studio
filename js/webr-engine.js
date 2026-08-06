@@ -1,7 +1,82 @@
-import { WEBR_MODULE_URL, WEBR_VERSION } from './config.js';
+import {
+  WEBR_VERSION, normalizeWebRVersion, webRBaseUrl, webRModuleUrl
+} from './config.js';
 import { rString, rVector, rName, normalizePath, dirname, formatBytes } from './utils.js';
 
 const MARKER_LINE = /^<<WEBRSTUDIO:(MESSAGE|WARNING|ERROR|INFO|VIEW|ECHO)>>(.*)$/;
+const RUNTIME_CANCELLATION = 'WebRRuntimeCancellation';
+const INTERRUPT_ERROR_PATTERN = /(?:execution (?:was )?interrupted|user interrupt|non-local transfer of control|^interrupt(?:ed)?[.!]?$)/i;
+
+export function normalizeRSource(value = '') {
+  return String(value)
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?|\u2028|\u2029/g, '\n');
+}
+
+export function normalizeVirtualPath(value = '/project') {
+  const source = String(value || '/project').trim().replaceAll('\\', '/');
+  const parts = [];
+  for (const part of `${source.startsWith('/') ? '' : '/'}${source}`.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join('/')}` || '/';
+}
+
+function isInterruptLikeError(error) {
+  return INTERRUPT_ERROR_PATTERN.test(error?.message || String(error || ''));
+}
+
+function scheduleOutputFrame(callback) {
+  const handle = { active: true, frameId: 0, timeoutId: 0 };
+  const run = () => {
+    if (!handle.active) return;
+    handle.active = false;
+    if (handle.frameId && typeof globalThis.cancelAnimationFrame === 'function') {
+      globalThis.cancelAnimationFrame(handle.frameId);
+    }
+    globalThis.clearTimeout(handle.timeoutId);
+    callback();
+  };
+  handle.timeoutId = globalThis.setTimeout(run, 16);
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    handle.frameId = globalThis.requestAnimationFrame(run);
+  }
+  return handle;
+}
+
+function cancelOutputFrame(handle) {
+  if (!handle?.active) return;
+  handle.active = false;
+  if (handle.frameId && typeof globalThis.cancelAnimationFrame === 'function') {
+    globalThis.cancelAnimationFrame(handle.frameId);
+  }
+  globalThis.clearTimeout(handle.timeoutId);
+}
+
+function runtimeCancellationError(message = 'Execution stopped because the webR runtime was restarted.') {
+  const error = new Error(message);
+  error.name = RUNTIME_CANCELLATION;
+  error.webrStudioCancelled = true;
+  return error;
+}
+
+function isRuntimeCancellation(error) {
+  return Boolean(error?.webrStudioCancelled || error?.name === RUNTIME_CANCELLATION);
+}
+
+export function stripTerminalControlSequences(value = '') {
+  return String(value)
+    // Operating System Command and other string-style terminal sequences.
+    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
+    .replace(/\x1B[P^_][\s\S]*?\x1B\\/g, '')
+    // ANSI/ECMA-48 Control Sequence Introducer sequences, including private
+    // cursor visibility commands such as ESC[?25h emitted by interactive R.
+    .replace(/(?:\x1B\[|\x9B)[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1B[@-_]/g, '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F-\u009F]/g, '');
+}
 
 function decodeRField(value = '') {
   try { return decodeURIComponent(value); } catch { return value; }
@@ -11,23 +86,27 @@ function parseDelimitedRecords(records, separator = '\u001f') {
   return records.map(record => String(record).split(separator).map(decodeRField));
 }
 
+function appendOutputItem(outputs, item) {
+  const previous = outputs.at(-1);
+  // Keep contiguous stream lines in one logical output block so document
+  // renderers do not create a padded, bordered <pre> for every displayed row.
+  if (previous?.type === item.type && (item.type === 'stdout' || item.type === 'stderr')) {
+    previous.text += `\n${item.text}`;
+  } else {
+    outputs.push(item);
+  }
+}
+
 function parseCapturedOutput(items = []) {
   const outputs = [];
-  const appendStream = (type, text) => {
-    const previous = outputs.at(-1);
-    // captureR returns ordinary stdout and stderr as one array entry per
-    // displayed line. Keep contiguous lines in one logical output block so
-    // document renderers do not create a padded, bordered <pre> for every row.
-    if (previous?.type === type && (type === 'stdout' || type === 'stderr')) {
-      previous.text += `\n${text}`;
-    } else {
-      outputs.push({ type, text });
-    }
-  };
+  const appendStream = (type, text) => appendOutputItem(outputs, { type, text });
 
   for (const item of items) {
     const fallbackType = item.type === 'stderr' ? 'stderr' : 'stdout';
-    const data = typeof item.data === 'string' ? item.data : String(item.data ?? '');
+    const data = stripTerminalControlSequences(
+      typeof item.data === 'string' ? item.data : String(item.data ?? '')
+    );
+    if (!data) continue;
     const lines = data.split(/\r?\n/);
     if (lines.length > 1 && lines.at(-1) === '') lines.pop();
     let ordinary = [];
@@ -53,16 +132,21 @@ function parseCapturedOutput(items = []) {
 }
 
 export class WebREngine extends EventTarget {
-  constructor() {
+  constructor({ version = WEBR_VERSION } = {}) {
     super();
     this.webR = null;
     this.module = null;
     this.ready = false;
     this.running = false;
     this.starting = false;
+    this.restarting = false;
     this.generation = 0;
-    this.version = WEBR_VERSION;
+    this.requestedVersion = normalizeWebRVersion(version);
+    this.version = this.requestedVersion;
+    this.baseUrl = webRBaseUrl(this.requestedVersion);
+    this.moduleUrl = webRModuleUrl(this.requestedVersion);
     this.rVersion = '';
+    this.interruptSupported = false;
     this.plotWidth = 7;
     this.plotHeight = 5;
     this.outputPump = null;
@@ -70,13 +154,26 @@ export class WebREngine extends EventTarget {
     this.replOperation = null;
     this.replAtPrompt = false;
     this.promptWaiters = new Set();
+    this.executionPhase = 'idle';
+    this.lastInterruptResult = { ok: false, reason: 'not-running' };
   }
 
   emit(type, detail = {}) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }
 
-  async initialize({ plotWidth = 7, plotHeight = 5, onProgress = () => {} } = {}) {
+  setExecutionPhase(phase, operation = 'repl') {
+    if (this.executionPhase === phase) return;
+    this.executionPhase = phase;
+    this.emit('state', { state: 'running', operation, phase });
+  }
+
+  async initialize({
+    version = this.requestedVersion,
+    plotWidth = 7,
+    plotHeight = 5,
+    onProgress = () => {}
+  } = {}) {
     if (this.ready) return this;
     if (this.starting) {
       await new Promise((resolve, reject) => {
@@ -87,13 +184,16 @@ export class WebREngine extends EventTarget {
     }
 
     this.starting = true;
+    this.requestedVersion = normalizeWebRVersion(version);
+    this.baseUrl = webRBaseUrl(this.requestedVersion);
+    this.moduleUrl = webRModuleUrl(this.requestedVersion);
     this.plotWidth = plotWidth;
     this.plotHeight = plotHeight;
     try {
       onProgress(12, 'Loading the webR runtime…');
-      this.module = await import(WEBR_MODULE_URL);
+      this.module = await import(this.moduleUrl);
       const { WebR } = this.module;
-      this.webR = new WebR({ interactive: true });
+      this.webR = new WebR({ interactive: true, baseUrl: this.baseUrl });
       onProgress(34, 'Starting R in a Web Worker…');
       await this.webR.init();
       this.startOutputPump();
@@ -103,8 +203,11 @@ export class WebREngine extends EventTarget {
       onProgress(74, 'Installing IDE helpers…');
       await this.installHelpers();
       await this.setPlotSize(plotWidth, plotHeight);
-      this.version = String(this.webR.version || WEBR_VERSION);
+      this.version = String(this.webR.version || this.requestedVersion);
       this.rVersion = String(this.webR.versionR || await this.webR.evalRString('R.version.string'));
+      this.interruptSupported = Boolean(
+        globalThis.crossOriginIsolated && typeof globalThis.SharedArrayBuffer === 'function'
+      );
       this.ready = true;
       this.starting = false;
       this.generation += 1;
@@ -151,10 +254,17 @@ local({
   e$last_expression <- ""
   e$last_error_call <- ""
   e$last_ok <- TRUE
+  e$last_interrupted <- FALSE
   e$emit <- function(kind, text) {
     text <- paste(as.character(text), collapse = " ")
     text <- gsub("[\\r\\n]+", " ", text)
     cat(sprintf("<<WEBRSTUDIO:%s>>%s\\n", kind, text), file = stderr())
+  }
+  e$is_interrupt_condition <- function(condition) {
+    message <- conditionMessage(condition)
+    inherits(condition, "interrupt") ||
+      grepl("non-local transfer of control", message, fixed = TRUE) ||
+      grepl("execution interrupted", message, ignore.case = TRUE)
   }
   e$View <- function(x, title = deparse(substitute(x), width.cutoff = 110L)) {
     expression <- substitute(x)
@@ -228,6 +338,7 @@ local({
     e$last_expression <- ""
     e$last_error_call <- ""
     e$last_ok <- TRUE
+    e$last_interrupted <- FALSE
     before <- grDevices::dev.list()
     on.exit({
       after <- grDevices::dev.list()
@@ -280,8 +391,15 @@ local({
             # still available here. The outer tryCatch only converts the error
             # into a result that JavaScript can inspect.
             e$last_ok <- FALSE
-            e$last_error <- conditionMessage(condition)
             e$last_expression <- expression_text
+            if (e$is_interrupt_condition(condition)) {
+              e$last_interrupted <- TRUE
+              e$last_error <- "Execution interrupted"
+              e$last_error_call <- ""
+              e$last_trace <- character()
+              return(invisible(NULL))
+            }
+            e$last_error <- conditionMessage(condition)
             call_ <- conditionCall(condition)
             e$last_error_call <- if (is.null(call_)) "" else paste(deparse(call_, width.cutoff = 110), collapse = " ")
             calls <- sys.calls()
@@ -303,9 +421,27 @@ local({
           }
         ),
         error = function(condition) {
-          if (!nzchar(e$last_error)) e$last_error <- conditionMessage(condition)
+          interrupted <- isTRUE(e$last_interrupted) || e$is_interrupt_condition(condition)
+          e$last_ok <- FALSE
           if (!nzchar(e$last_expression)) e$last_expression <- expression_text
-          e$emit("ERROR", conditionMessage(condition))
+          if (interrupted) {
+            e$last_interrupted <- TRUE
+            e$last_error <- "Execution interrupted"
+            e$last_error_call <- ""
+            e$last_trace <- character()
+          } else {
+            if (!nzchar(e$last_error)) e$last_error <- conditionMessage(condition)
+            e$emit("ERROR", conditionMessage(condition))
+          }
+          structure(list(value = NULL, visible = FALSE), class = "webrstudio_error")
+        },
+        interrupt = function(condition) {
+          e$last_ok <- FALSE
+          e$last_interrupted <- TRUE
+          e$last_error <- "Execution interrupted"
+          e$last_expression <- expression_text
+          e$last_error_call <- ""
+          e$last_trace <- character()
           structure(list(value = NULL, visible = FALSE), class = "webrstudio_error")
         }
       )
@@ -327,10 +463,32 @@ local({
       working_directory = working_directory
     )
   }
+  e$finish_run <- function(token) {
+    # A stdout sentinel with a newline forces any final partial line from cat()
+    # into the stream. JavaScript removes the sentinel while preserving the
+    # user text that immediately precedes it.
+    cat(sprintf("<<WEBRSTUDIO:FLUSH>>%s\\n", token), file = stdout())
+    flush.console()
+    cat(sprintf("<<WEBRSTUDIO:DONE>>%s\\n", token), file = stderr())
+    flush(stderr())
+  }
+  e$run_eval <- function(code, plot_width = NULL, plot_height = NULL, token = "") {
+    token <- gsub("[^A-Za-z0-9_-]", "", as.character(token)[1L])
+    cat(sprintf("<<WEBRSTUDIO:START>>%s\\n", token), file = stderr())
+    on.exit(e$finish_run(token), add = TRUE)
+    e$eval(code, plot_width = plot_width, plot_height = plot_height)
+  }
+  e$run_eval_file <- function(path, plot_width = NULL, plot_height = NULL, token = "") {
+    path <- normalizePath(as.character(path)[1L], mustWork = TRUE)
+    on.exit(try(unlink(path), silent = TRUE), add = TRUE)
+    source_lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
+    source_code <- paste(source_lines, collapse = "\n")
+    e$run_eval(source_code, plot_width = plot_width, plot_height = plot_height, token = token)
+  }
   e$run_source <- function(path, echo = FALSE, token = "") {
     token <- gsub("[^A-Za-z0-9_-]", "", as.character(token)[1L])
     cat(sprintf("<<WEBRSTUDIO:START>>%s\\n", token), file = stderr())
-    on.exit(cat(sprintf("<<WEBRSTUDIO:DONE>>%s\\n", token), file = stderr()), add = TRUE)
+    on.exit(e$finish_run(token), add = TRUE)
     e$source(path, echo = echo, chdir = TRUE, encoding = "UTF-8")
   }
 })`;
@@ -344,10 +502,31 @@ local({
     this.replAtPrompt = false;
     this.outputPump = (async () => {
       try {
-        for await (const message of webR.stream()) {
+        for (;;) {
+          const first = await webR.read();
           if (generation !== this.outputPumpGeneration || webR !== this.webR) break;
-          await this.handleOutputMessage(message);
-          if (message?.type === 'closed') break;
+          const messages = [first];
+          if (first?.type !== 'closed' && typeof webR.flush === 'function') {
+            try {
+              const queued = await webR.flush();
+              if (Array.isArray(queued)) messages.push(...queued);
+            } catch { /* The channel may be closing. */ }
+          }
+          // Inspect control messages before rendering ordinary output. A fast
+          // expression can finish while thousands of stdout messages are still
+          // queued on the main thread. Recognising DONE and the prompt first
+          // prevents Stop from interrupting the next R request by mistake.
+          this.preflightOutputMessages(messages);
+          for (let index = 0; index < messages.length; index += 1) {
+            if (generation !== this.outputPumpGeneration || webR !== this.webR) break;
+            const message = messages[index];
+            this.handleOutputMessage(message);
+            if (message?.type === 'closed') return;
+            // Keep this drain atomic with respect to UI click handlers. The
+            // renderer is already frame-batched, so processing the complete
+            // queue here is cheap and prevents a Stop click from overtaking a
+            // DONE marker that is waiting later in the same output batch.
+          }
         }
       } catch (error) {
         if (generation === this.outputPumpGeneration && webR === this.webR) {
@@ -361,7 +540,52 @@ local({
     return this.outputPump;
   }
 
-  async handleOutputMessage(message = {}) {
+  preflightOutputMessages(messages = []) {
+    const operation = this.replOperation;
+    if (!operation || operation.settled) return;
+
+    // Preview control-message order without mutating the operation itself.
+    // handleOutputMessage() will apply the same messages in their real order.
+    // Keeping preview and committed state separate is essential when a stale
+    // prompt from the previous command and this command's START marker are
+    // returned by the same flush() call: that old prompt must never count as
+    // the prompt that completes the new command.
+    let started = operation.started;
+    let done = operation.done;
+    let flushed = operation.flushed;
+    let prompt = operation.prompt;
+    let phase = this.executionPhase;
+
+    for (const message of messages) {
+      const type = String(message?.type || '');
+      if (type === 'prompt') {
+        const primaryPrompt = String(message.data || '').trimStart().startsWith('>');
+        if (primaryPrompt && started) {
+          prompt = true;
+          if (done || flushed) phase = 'finalizing';
+        }
+        continue;
+      }
+      if (type !== 'stdout' && type !== 'stderr') continue;
+      const raw = stripTerminalControlSequences(String(message.data ?? ''));
+      if (raw.includes(`<<WEBRSTUDIO:FLUSH>>${operation.token}`)) flushed = true;
+      const signal = raw.trim().match(/^<<WEBRSTUDIO:(START|DONE)>>([A-Za-z0-9_-]+)$/);
+      if (!signal || signal[2] !== operation.token) continue;
+      if (signal[1] === 'START') {
+        started = true;
+        prompt = false;
+        phase = 'evaluating';
+      } else {
+        done = true;
+        phase = 'finalizing';
+      }
+    }
+
+    if (started && (done || (prompt && flushed))) phase = 'finalizing';
+    if (phase !== this.executionPhase) this.setExecutionPhase(phase, operation.operationName);
+  }
+
+  handleOutputMessage(message = {}) {
     const type = String(message.type || '');
     if (type === 'prompt') {
       this.replAtPrompt = String(message.data || '').trimStart().startsWith('>');
@@ -369,17 +593,18 @@ local({
         for (const waiter of [...this.promptWaiters]) waiter.resolve();
         this.promptWaiters.clear();
         const operation = this.replOperation;
-        // The generated source command emits START before evaluation. The
-        // next primary prompt is the definitive completion boundary, after all
-        // stdout and stderr messages already queued by the script.
-        if (operation?.started) operation.finish();
+        if (operation) {
+          if (operation.started) operation.prompt = true;
+          if (operation.started) this.setExecutionPhase('finalizing', operation.operationName);
+          this.maybeFinishReplOperation(operation);
+        }
       }
       return;
     }
 
     if (type === 'closed') {
       this.replAtPrompt = false;
-      this.abortReplOperation(new Error('The webR worker closed while the script was running.'));
+      this.abortReplOperation(new Error('The webR worker closed while R was running.'));
       for (const waiter of [...this.promptWaiters]) waiter.reject(new Error('The webR worker closed before an R prompt became available.'));
       this.promptWaiters.clear();
       return;
@@ -388,23 +613,100 @@ local({
     const operation = this.replOperation;
     if (!operation || (type !== 'stdout' && type !== 'stderr')) return;
     this.replAtPrompt = false;
-    const raw = String(message.data ?? '');
+    let raw = stripTerminalControlSequences(String(message.data ?? ''));
+    const flushMarker = `<<WEBRSTUDIO:FLUSH>>${operation.token}`;
+    if (raw.includes(flushMarker)) {
+      operation.flushed = true;
+      raw = raw.split(flushMarker).join('');
+      if (/^(?:\r?\n)*$/.test(raw)) raw = '';
+    }
     const signal = raw.trim().match(/^<<WEBRSTUDIO:(START|DONE)>>([A-Za-z0-9_-]+)$/);
     if (signal && signal[2] === operation.token) {
-      if (signal[1] === 'START') operation.started = true;
-      else operation.done = true;
+      if (signal[1] === 'START') {
+        operation.started = true;
+        operation.prompt = false;
+        this.setExecutionPhase('evaluating', operation.operationName);
+      }
+      else {
+        operation.done = true;
+        this.setExecutionPhase('finalizing', operation.operationName);
+      }
+      this.maybeFinishReplOperation(operation);
       return;
     }
 
-    for (const item of parseCapturedOutput([{ type, data: raw }])) {
-      try {
-        await operation.onOutput(item);
-      } catch (error) {
-        // Console rendering must never break the worker output pump. Keep R
-        // running and surface the rendering problem in the browser console.
-        console.warn('Could not render streamed R output:', error);
+    for (const item of raw ? parseCapturedOutput([{ type, data: raw }]) : []) {
+      if (operation.interruptRequested && isInterruptLikeError(item.text)) {
+        operation.interruptObserved = true;
+        // webR can report its internal long-jump wording when an interrupt
+        // lands at an evaluation boundary. Do not expose that implementation
+        // detail as an R error in the console.
+        if (item.type === 'error' || item.type === 'stderr') continue;
+      }
+      this.enqueueReplOutput(operation, item);
+    }
+    this.maybeFinishReplOperation(operation);
+  }
+
+  enqueueReplOutput(operation, item = {}) {
+    if (!operation || operation.settled || operation !== this.replOperation) return;
+    const type = String(item.type || 'stdout');
+    const text = String(item.text ?? '');
+    const coalescible = type === 'stdout' || type === 'stderr';
+    const previous = operation.outputQueue.at(-1);
+    if (coalescible && previous?.type === type && previous.parts) {
+      previous.parts.push(text);
+    } else if (coalescible) {
+      operation.outputQueue.push({ type, parts: [text] });
+    } else {
+      operation.outputQueue.push({ type, text });
+    }
+    this.scheduleReplOutput(operation);
+  }
+
+  scheduleReplOutput(operation) {
+    if (
+      !operation || operation.settled || operation !== this.replOperation ||
+      operation.outputFrame || operation.outputTask
+    ) return;
+    operation.outputFrame = scheduleOutputFrame(() => {
+      operation.outputFrame = null;
+      if (operation.settled || operation !== this.replOperation) return;
+      operation.outputTask = this.drainReplOutput(operation)
+        .catch(error => console.warn('Could not render streamed R output:', error))
+        .finally(() => {
+          operation.outputTask = null;
+          if (operation.settled || operation !== this.replOperation) return;
+          if (operation.outputQueue.length) this.scheduleReplOutput(operation);
+          else this.maybeFinishReplOperation(operation);
+        });
+    });
+  }
+
+  async drainReplOutput(operation) {
+    while (!operation.settled && operation === this.replOperation && operation.outputQueue.length) {
+      const pending = operation.outputQueue.splice(0);
+      for (const record of pending) {
+        const item = record.parts
+          ? { type: record.type, text: record.parts.join('\n') }
+          : { type: record.type, text: record.text };
+        try {
+          await operation.onOutput(item);
+        } catch (error) {
+          // Console rendering must never break the worker output pump. Keep R
+          // running and surface the rendering problem in the browser console.
+          console.warn('Could not render streamed R output:', error);
+        }
       }
     }
+  }
+
+  maybeFinishReplOperation(operation = this.replOperation) {
+    if (!operation || operation !== this.replOperation || operation.settled) return false;
+    if (!(operation.started && operation.done && operation.flushed && operation.prompt)) return false;
+    if (operation.outputQueue.length || operation.outputFrame || operation.outputTask) return false;
+    operation.finish();
+    return true;
   }
 
   waitForPrompt(timeoutMs = 1500) {
@@ -431,14 +733,14 @@ local({
     });
   }
 
-  async runReplCommand(command, { token, onOutput = async () => {} } = {}) {
+  async runReplCommand(command, { token, onOutput = async () => {}, operationName = 'repl' } = {}) {
     this.assertReady();
     if (this.replOperation) throw new Error('Another interactive R command is already running.');
     // A stale API request may briefly delay the REPL prompt. Waiting is best
     // effort: stdin is queued safely even if the prompt arrives just after the
     // timeout, and the START marker prevents an old prompt completing the run.
     await this.waitForPrompt().catch(() => {});
-    const operationToken = String(token || `source_${Date.now()}_${Math.random().toString(36).slice(2)}`)
+    const operationToken = String(token || `operation_${Date.now()}_${Math.random().toString(36).slice(2)}`)
       .replace(/[^A-Za-z0-9_-]/g, '');
 
     return new Promise((resolve, reject) => {
@@ -446,24 +748,52 @@ local({
       const finish = error => {
         if (settled) return;
         settled = true;
+        operation.settled = true;
         globalThis.clearTimeout(timeout);
+        if (error) {
+          cancelOutputFrame(operation.outputFrame);
+          operation.outputFrame = null;
+          operation.outputQueue.length = 0;
+        }
         if (this.replOperation === operation) this.replOperation = null;
-        if (error) reject(error); else resolve();
+        const summary = {
+          token: operation.token,
+          started: operation.started,
+          done: operation.done,
+          prompt: operation.prompt,
+          interruptRequested: operation.interruptRequested,
+          interruptObserved: operation.interruptObserved
+        };
+        if (error) reject(error); else resolve(summary);
       };
       const operation = {
         token: operationToken,
+        operationName,
         onOutput,
         started: false,
         done: false,
+        flushed: false,
+        prompt: false,
+        interruptRequested: false,
+        interruptObserved: false,
+        interruptRequestedAt: 0,
+        outputQueue: [],
+        outputFrame: null,
+        outputTask: null,
+        settled: false,
         finish
       };
       const timeout = globalThis.setTimeout(
-        () => finish(new Error('The sourced script did not return control to the R console.')),
+        () => finish(new Error('The R command did not return control to the console.')),
         24 * 60 * 60 * 1000
       );
       this.replOperation = operation;
       this.replAtPrompt = false;
-      Promise.resolve(this.webR.writeConsole(command)).catch(finish);
+      try {
+        this.webR.writeConsole(command);
+      } catch (error) {
+        finish(error);
+      }
     });
   }
 
@@ -479,6 +809,7 @@ local({
     this.promptWaiters.clear();
     this.outputPump = null;
     this.replAtPrompt = false;
+    this.executionPhase = 'idle';
   }
 
   async ensureDirectory(path) {
@@ -520,32 +851,114 @@ local({
     }
   }
 
-  async execute(code, { capturePlots = true, plotWidth = null, plotHeight = null } = {}) {
+  async listVirtualFiles(directory = '/project') {
+    this.assertIdle('Runtime file browsing');
+    const path = normalizeVirtualPath(directory);
+    const records = await this.evalStringArray(`local({
+      path <- ${rString(path)}
+      if (!dir.exists(path)) stop(sprintf("Directory does not exist: %s", path), call. = FALSE)
+      names_ <- list.files(path, all.files = TRUE, full.names = FALSE, no.. = TRUE)
+      if (!length(names_)) character() else {
+        full <- file.path(path, names_)
+        info <- file.info(full)
+        is_dir <- !is.na(info$isdir) & info$isdir
+        order_ <- order(!is_dir, tolower(names_), names_)
+        sep <- intToUtf8(31)
+        enc <- function(x) utils::URLencode(enc2utf8(as.character(x)), reserved = TRUE)
+        vapply(order_, function(index) {
+          values <- c(
+            names_[index],
+            full[index],
+            is_dir[index],
+            if (is_dir[index] || is.na(info$size[index])) 0 else info$size[index],
+            if (is.na(info$mtime[index])) 0 else as.numeric(info$mtime[index])
+          )
+          paste(vapply(values, enc, character(1)), collapse = sep)
+        }, character(1))
+      }
+    })`);
+    return {
+      path,
+      entries: parseDelimitedRecords(records).map(fields => ({
+        name: fields[0],
+        path: normalizeVirtualPath(fields[1]),
+        isDirectory: fields[2] === 'TRUE',
+        size: Number(fields[3]) || 0,
+        modifiedAt: (Number(fields[4]) || 0) * 1000
+      }))
+    };
+  }
+
+  async readVirtualFile(path) {
+    this.assertIdle('Runtime file download');
+    const target = normalizeVirtualPath(path);
+    return new Uint8Array(await this.webR.FS.readFile(target));
+  }
+
+  async readLastRunState({ attempts = 4 } = {}) {
+    let boundaryInterrupt = false;
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const state = await this.webR.evalRString(
+          'paste(as.integer(c(isTRUE(.webrStudio$last_interrupted), isTRUE(.webrStudio$last_ok))), collapse = "|")'
+        );
+        const [interrupted = '0', ok = '0'] = String(state).split('|');
+        return { interrupted: interrupted === '1', ok: ok === '1', boundaryInterrupt };
+      } catch (error) {
+        lastError = error;
+        if (!isInterruptLikeError(error)) throw error;
+        // An interrupt can race with the tiny interval after user evaluation
+        // has completed. In that case it is consumed by this first inspection
+        // request. Retry against the same worker and report it as late instead
+        // of mislabelling a completed expression as interrupted.
+        boundaryInterrupt = true;
+        await new Promise(resolve => globalThis.setTimeout(resolve, 0));
+      }
+    }
+    throw lastError || new Error('Could not inspect the completed R expression.');
+  }
+
+  async execute(code, { capturePlots = true, plotWidth = null, plotHeight = null, onOutput = null } = {}) {
     this.assertReady();
-    if (!String(code).trim()) return { ok: true, outputs: [], plots: [], traceback: [], elapsed: 0 };
+    const source = normalizeRSource(code);
+    if (!source.trim()) return { ok: true, outputs: [], plots: [], traceback: [], elapsed: 0, streamed: false };
     if (this.running) throw new Error('The webR runtime is busy with another expression');
+    const token = `execute_${Date.now()}_${Math.random().toString(36).slice(2)}`.replace(/[^A-Za-z0-9_-]/g, '');
+    const commandPath = `/tmp/webrstudio-input-${token}.R`;
+    const outputs = [];
+    let errorMessage = '';
+    const deliver = async item => {
+      if (item.type === 'error') errorMessage = item.text;
+      if (typeof onOutput === 'function') await onOutput(item);
+      else appendOutputItem(outputs, item);
+    };
     this.running = true;
-    this.emit('state', { state: 'running' });
+    this.executionPhase = 'preparing';
+    this.emit('state', { state: 'running', operation: 'execute', phase: this.executionPhase });
     const started = performance.now();
-    let shelter;
+    let cancelled = false;
     try {
       if (capturePlots) {
         await this.webR.evalRVoid(`unlink(list.files("/tmp", pattern = "^webrstudio-plot-.*[.]svg$", full.names = TRUE))`);
       }
-      shelter = await new this.webR.Shelter();
+      await this.webR.FS.writeFile(commandPath, new TextEncoder().encode(source));
       const width = Number(plotWidth);
       const height = Number(plotHeight);
       const rPlotWidth = Number.isFinite(width) && width > 0 ? String(width) : 'NULL';
       const rPlotHeight = Number.isFinite(height) && height > 0 ? String(height) : 'NULL';
-      const captured = await shelter.captureR(
-        `.webrStudio$eval(${rString(code)}, plot_width = ${rPlotWidth}, plot_height = ${rPlotHeight})`,
-        { captureConditions: false, captureGraphics: false }
-      );
-      const outputs = parseCapturedOutput(captured.output || []);
-      let errorMessage = '';
-      for (const output of outputs) if (output.type === 'error') errorMessage = output.text;
-      const ok = await this.webR.evalRBoolean('isTRUE(.webrStudio$last_ok)');
-      const [traceback, expression, errorCall] = ok ? [[], '', ''] : await Promise.all([
+      const command = `.webrStudio$run_eval_file(${rString(commandPath)}, plot_width = ${rPlotWidth}, plot_height = ${rPlotHeight}, token = ${rString(token)})`;
+      const replSummary = await this.runReplCommand(command, {
+        token,
+        onOutput: deliver,
+        operationName: 'execute'
+      });
+      this.setExecutionPhase('finalizing', 'execute');
+      const runState = await this.readLastRunState();
+      const interrupted = runState.interrupted;
+      const interruptLate = Boolean(replSummary.interruptRequested && !interrupted && runState.boundaryInterrupt);
+      const ok = interrupted ? false : runState.ok;
+      const [traceback, expression, errorCall] = ok || interrupted ? [[], '', ''] : await Promise.all([
         this.evalStringArray('if (length(.webrStudio$last_trace)) .webrStudio$last_trace else character()'),
         this.webR.evalRString('.webrStudio$last_expression'),
         this.webR.evalRString('.webrStudio$last_error_call')
@@ -553,25 +966,65 @@ local({
       const plots = capturePlots ? await this.collectSvgPlots() : [];
       return {
         ok,
+        interrupted,
+        interruptLate,
         outputs,
         plots,
         traceback: this.cleanTraceback(traceback, expression, errorCall),
-        error: errorMessage || (ok ? '' : await this.webR.evalRString('.webrStudio$last_error')),
-        elapsed: performance.now() - started
+        error: interrupted
+          ? 'Execution interrupted.'
+          : errorMessage || (ok ? '' : await this.webR.evalRString('.webrStudio$last_error')),
+        elapsed: performance.now() - started,
+        streamed: typeof onOutput === 'function'
       };
     } catch (error) {
+      if (isRuntimeCancellation(error) || this.restarting) {
+        cancelled = true;
+        return {
+          ok: false,
+          cancelled: true,
+          outputs,
+          plots: [],
+          traceback: [],
+          error: 'Execution stopped.',
+          elapsed: performance.now() - started,
+          streamed: typeof onOutput === 'function'
+        };
+      }
+      const message = error?.message || String(error);
+      let interrupted = false;
+      let interruptLate = false;
+      let recoveredOk = false;
+      if (this.lastInterruptResult.ok && isInterruptLikeError(error) && this.webR) {
+        try {
+          const runState = await this.readLastRunState();
+          interrupted = runState.interrupted;
+          interruptLate = !interrupted;
+          recoveredOk = runState.ok;
+        } catch { /* Fall through to the original worker error. */ }
+      }
+      if (!interrupted && !interruptLate) {
+        await deliver({ type: 'error', text: message });
+      }
       return {
-        ok: false,
-        outputs: [{ type: 'error', text: error.message || String(error) }],
+        ok: interruptLate && recoveredOk,
+        interrupted,
+        interruptLate,
+        outputs,
         plots: [],
         traceback: [],
-        error: error.message || String(error),
-        elapsed: performance.now() - started
+        error: interrupted ? 'Execution interrupted.' : interruptLate ? '' : message,
+        elapsed: performance.now() - started,
+        streamed: typeof onOutput === 'function'
       };
     } finally {
-      try { await shelter?.purge(); } catch { /* Purging is best effort after interruption. */ }
+      try { await this.webR?.FS.unlink(commandPath); } catch { /* The R helper normally removes it. */ }
       this.running = false;
-      this.emit('state', { state: this.ready ? 'ready' : 'stopped' });
+      this.executionPhase = 'idle';
+      this.lastInterruptResult = { ok: false, reason: 'not-running' };
+      if (!cancelled && !this.restarting) {
+        this.emit('state', { state: this.ready ? 'ready' : 'stopped', operation: 'execute', phase: this.executionPhase });
+      }
     }
   }
 
@@ -590,19 +1043,28 @@ local({
     const deliver = async item => {
       if (item.type === 'error') errorMessage = item.text;
       if (typeof onOutput === 'function') await onOutput(item);
-      else outputs.push(item);
+      else appendOutputItem(outputs, item);
     };
 
     this.running = true;
-    this.emit('state', { state: 'running', operation: echo ? 'source-echo' : 'source' });
+    this.executionPhase = 'preparing';
+    this.emit('state', { state: 'running', operation: echo ? 'source-echo' : 'source', phase: this.executionPhase });
     const started = performance.now();
+    let cancelled = false;
     try {
       await this.webR.evalRVoid('unlink(list.files("/tmp", pattern = "^webrstudio-plot-.*[.]svg$", full.names = TRUE))');
       const command = `.webrStudio$run_source(${rString(target)}, ${echoValue}, ${rString(token)})`;
-      await this.runReplCommand(command, { token, onOutput: deliver });
-
-      const ok = await this.webR.evalRBoolean('isTRUE(.webrStudio$last_ok)');
-      const [traceback, expression, errorCall] = ok ? [[], '', ''] : await Promise.all([
+      const replSummary = await this.runReplCommand(command, {
+        token,
+        onOutput: deliver,
+        operationName: echo ? 'source-echo' : 'source'
+      });
+      this.setExecutionPhase('finalizing', echo ? 'source-echo' : 'source');
+      const runState = await this.readLastRunState();
+      const interrupted = runState.interrupted;
+      const interruptLate = Boolean(replSummary.interruptRequested && !interrupted && runState.boundaryInterrupt);
+      const ok = interrupted ? false : runState.ok;
+      const [traceback, expression, errorCall] = ok || interrupted ? [[], '', ''] : await Promise.all([
         this.evalStringArray('if (length(.webrStudio$last_trace)) .webrStudio$last_trace else character()'),
         this.webR.evalRString('.webrStudio$last_expression'),
         this.webR.evalRString('.webrStudio$last_error_call')
@@ -610,30 +1072,65 @@ local({
       const plots = await this.collectSvgPlots();
       return {
         ok,
+        interrupted,
+        interruptLate,
         outputs,
         plots,
         traceback: this.cleanTraceback(traceback, expression, errorCall),
-        error: errorMessage || (ok ? '' : await this.webR.evalRString('.webrStudio$last_error')),
+        error: interrupted
+          ? 'Execution interrupted.'
+          : errorMessage || (ok ? '' : await this.webR.evalRString('.webrStudio$last_error')),
         elapsed: performance.now() - started,
         streamed: typeof onOutput === 'function'
       };
     } catch (error) {
+      if (isRuntimeCancellation(error) || this.restarting) {
+        cancelled = true;
+        return {
+          ok: false,
+          cancelled: true,
+          outputs,
+          plots: [],
+          traceback: [],
+          error: 'Execution stopped.',
+          elapsed: performance.now() - started,
+          streamed: typeof onOutput === 'function'
+        };
+      }
       const message = error?.message || String(error);
-      await deliver({ type: 'error', text: message });
+      let interrupted = false;
+      let interruptLate = false;
+      let recoveredOk = false;
+      if (this.lastInterruptResult.ok && isInterruptLikeError(error) && this.webR) {
+        try {
+          const runState = await this.readLastRunState();
+          interrupted = runState.interrupted;
+          interruptLate = !interrupted;
+          recoveredOk = runState.ok;
+        } catch { /* Fall through to the original worker error. */ }
+      }
+      if (!interrupted && !interruptLate) await deliver({ type: 'error', text: message });
       return {
-        ok: false,
+        ok: interruptLate && recoveredOk,
+        interrupted,
+        interruptLate,
         outputs,
         plots: [],
         traceback: [],
-        error: message,
+        error: interrupted ? 'Execution interrupted.' : interruptLate ? '' : message,
         elapsed: performance.now() - started,
         streamed: typeof onOutput === 'function'
       };
     } finally {
       this.running = false;
-      this.emit('state', { state: this.ready ? 'ready' : 'stopped', operation: echo ? 'source-echo' : 'source' });
+      this.executionPhase = 'idle';
+      this.lastInterruptResult = { ok: false, reason: 'not-running' };
+      if (!cancelled && !this.restarting) {
+        this.emit('state', { state: this.ready ? 'ready' : 'stopped', operation: echo ? 'source-echo' : 'source', phase: this.executionPhase });
+      }
     }
   }
+
 
   async evaluateInline(code) {
     this.assertReady();
@@ -747,25 +1244,64 @@ local({
     }
   }
 
-  async interrupt() {
-    if (!this.webR || !this.running) return false;
-    try {
-      await this.webR.interrupt();
-      return true;
-    } catch {
-      return false;
+  requestInterrupt() {
+    let result;
+    const operation = this.replOperation;
+    if (!this.webR || !this.running) {
+      result = { ok: false, reason: 'not-running' };
+    } else if (!this.interruptSupported) {
+      result = { ok: false, reason: 'unsupported' };
+    } else if (this.executionPhase !== 'evaluating' || !operation) {
+      result = { ok: false, reason: this.executionPhase === 'preparing' ? 'preparing' : 'finishing' };
+    } else if (!operation.started) {
+      result = { ok: false, reason: 'preparing' };
+    } else if (operation.done || operation.prompt) {
+      result = { ok: false, reason: 'finishing' };
+    } else if (operation.interruptRequested) {
+      result = { ok: true, reason: 'already-requested' };
+    } else {
+      operation.interruptRequested = true;
+      operation.interruptRequestedAt = performance.now();
+      try {
+        this.webR.interrupt();
+        result = { ok: true, reason: 'requested' };
+      } catch (error) {
+        operation.interruptRequested = false;
+        operation.interruptRequestedAt = 0;
+        result = { ok: false, reason: 'failed', error };
+      }
     }
+    this.lastInterruptResult = result;
+    return result;
+  }
+
+  interrupt() {
+    return this.requestInterrupt().ok;
+  }
+
+  setRequestedVersion(version = WEBR_VERSION) {
+    this.requestedVersion = normalizeWebRVersion(version);
+    this.baseUrl = webRBaseUrl(this.requestedVersion);
+    this.moduleUrl = webRModuleUrl(this.requestedVersion);
+    return this.requestedVersion;
   }
 
   async restart(options = {}) {
+    this.restarting = true;
     this.emit('state', { state: 'restarting' });
-    this.stopOutputPump(new Error('The webR runtime is restarting.'));
-    try { await this.webR?.close(); } catch { /* A terminated worker may already be closed. */ }
+    const previousRuntime = this.webR;
     this.webR = null;
     this.ready = false;
-    this.running = false;
-    this.starting = false;
-    return this.initialize(options);
+    this.interruptSupported = false;
+    this.stopOutputPump(runtimeCancellationError());
+    try {
+      try { await previousRuntime?.close(); } catch { /* A terminated worker may already be closed. */ }
+      this.running = false;
+      this.starting = false;
+      return await this.initialize(options);
+    } finally {
+      this.restarting = false;
+    }
   }
 
   async close() {
@@ -774,6 +1310,7 @@ local({
       this.webR = null;
       this.ready = false;
       this.running = false;
+      this.interruptSupported = false;
     }
   }
 
@@ -1166,8 +1703,10 @@ local({
       R: this.rVersion,
       platform,
       memoryMb: memory,
-      isolated: globalThis.crossOriginIsolated,
-      channel: globalThis.crossOriginIsolated ? 'SharedArrayBuffer' : 'PostMessage'
+      isolated: this.interruptSupported,
+      interruptible: this.interruptSupported,
+      requestedWebR: this.requestedVersion,
+      channel: this.interruptSupported ? 'SharedArrayBuffer' : 'PostMessage'
     };
   }
 
@@ -1183,7 +1722,7 @@ local({
 
 export function describeRuntime(engine) {
   if (!engine.ready) return 'R is offline';
-  return `${engine.rVersion || 'R'} · webR ${engine.version} · ${globalThis.crossOriginIsolated ? 'interruptible' : 'fallback channel'}`;
+  return `${engine.rVersion || 'R'} · webR ${engine.version} · ${engine.interruptSupported ? 'interruptible' : 'PostMessage · interruption unavailable'}`;
 }
 
 export function environmentTypeLabel(object) {

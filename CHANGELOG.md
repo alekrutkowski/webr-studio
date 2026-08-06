@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.2.9 – 2026-08-06
+
+- Normalized Windows, classic-Mac, and Unicode line endings before console evaluation, and handed multiline commands to R through a temporary UTF-8 file.
+- Batched high-volume stdout and stderr updates so the browser keeps pace more closely with output-heavy R loops.
+- Preserved every output line already produced by R after Stop, rather than discarding queued output and making the visible last value disagree with the saved loop variable.
+- Disabled Stop as soon as completion markers reach the webR output queue, preventing a late click from interrupting the next R request while completed output is still rendering.
+- Classified boundary-race interrupts separately and suppressed webR's internal non-local-transfer wording from the user-facing console.
+- Added a Files panel for browsing the webR virtual filesystem, navigating directories, and downloading generated files directly from their runtime bytes.
+
+## 1.2.8 – 2026-08-05
+
+- Changed Stop to use only webR's state-preserving interrupt mechanism and never replace the R worker implicitly.
+- Discarded stale queued stdout and stderr after an interrupt request so control returns promptly even after output-heavy loops.
+- Reported the PostMessage channel limitation without destroying or replacing the current R session.
+- Fixed the cross-origin-isolation service-worker handoff so the page reloads once after the worker gains control.
+- Fixed the console input remaining read-only after an explicit R restart by resetting its execution lock with generation-safe submission handling.
+
+## 1.2.7 – 2026-08-05
+
+- Made the title-bar theme button switch directly between the currently visible light and dark themes.
+- Added reliable Stop behaviour: SharedArrayBuffer sessions receive an interrupt, while unsupported or unresponsive sessions restart the R worker automatically.
+- Kept submitted console code on the same line as the `>` prompt.
+- Added a saved webR version selector with `latest` and explicit-release support.
+- Displayed the active R version beside the `R ready` status.
+- Removed terminal cursor-control sequences from console and R Markdown output.
+- Added an explicit stdout flush boundary so partial `cat()` output cannot leak into the next R Markdown chunk.
+- Kept `results='asis'` output together, preventing generated tables from inheriting a preceding list item.
+- Removed the unnecessary vertical scrollbar from centred display mathematics.
+
 ## 1.2.6 – 2026-08-03
 
 - Removed every per-version release-note file from the distributable repository.

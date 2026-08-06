@@ -8,24 +8,36 @@
   const COEP = 'require-corp';
 
   if (typeof window !== 'undefined') {
-    if (!('serviceWorker' in navigator) || window.crossOriginIsolated) return;
+    if (!('serviceWorker' in navigator)) return;
 
-    navigator.serviceWorker.register('./coi-serviceworker.js', { scope: './' })
-      .then(registration => {
-        const reloadOnce = () => {
-          if (navigator.serviceWorker.controller) return;
-          const key = 'webr-studio-coi-reload';
-          if (sessionStorage.getItem(key)) return;
-          sessionStorage.setItem(key, '1');
-          window.location.reload();
-        };
+    const reloadKey = 'webr-studio-coi-reload-v2';
+    if (window.crossOriginIsolated) {
+      sessionStorage.removeItem(reloadKey);
+      return;
+    }
 
-        if (registration.active) reloadOnce();
-        registration.addEventListener('updatefound', () => {
-          registration.installing?.addEventListener('statechange', event => {
-            if (event.target.state === 'activated') reloadOnce();
-          });
-        });
+    let reloadScheduled = false;
+    const reloadUnderController = () => {
+      // clients.claim() can install a controller for the current document, but
+      // that document was loaded without COOP/COEP. Reload exactly once so the
+      // navigation itself passes through the service worker and becomes
+      // cross-origin isolated.
+      if (reloadScheduled || !navigator.serviceWorker.controller) return;
+      if (sessionStorage.getItem(reloadKey)) return;
+      reloadScheduled = true;
+      sessionStorage.setItem(reloadKey, '1');
+      window.location.reload();
+    };
+
+    navigator.serviceWorker.addEventListener('controllerchange', reloadUnderController);
+    navigator.serviceWorker.register('./coi-serviceworker.js', {
+      scope: './',
+      updateViaCache: 'none'
+    })
+      .then(async () => {
+        reloadUnderController();
+        await navigator.serviceWorker.ready;
+        reloadUnderController();
       })
       .catch(error => console.warn('Cross-origin isolation service worker was not registered:', error));
     return;

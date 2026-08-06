@@ -1,12 +1,35 @@
-export const APP_VERSION = '1.2.6';
+export const APP_VERSION = '1.2.9';
 export const WEBR_VERSION = '0.6.0';
-export const WEBR_MODULE_URL = `https://webr.r-wasm.org/v${WEBR_VERSION}/webr.mjs`;
+export const WEBR_VERSION_SUGGESTIONS = Object.freeze([
+  'latest', '0.6.0', '0.5.9', '0.5.8', '0.5.7', '0.5.6'
+]);
 export const MAX_FILE_BYTES = 100 * 1024 * 1024;
 export const MAX_EDITOR_BYTES = 4 * 1024 * 1024;
 export const MAX_URL_STATE_CHARS = 24_000;
 
+export function normalizeWebRVersion(value = WEBR_VERSION) {
+  const version = String(value || '').trim().replace(/^v(?=\d)/i, '');
+  if (!version) return WEBR_VERSION;
+  if (version.toLowerCase() === 'latest') return 'latest';
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error('Enter “latest” or a webR release such as 0.6.0.');
+  }
+  return version;
+}
+
+export function webRBaseUrl(version = WEBR_VERSION) {
+  const normalized = normalizeWebRVersion(version);
+  const directory = normalized === 'latest' ? 'latest' : `v${normalized}`;
+  return `https://webr.r-wasm.org/${directory}/`;
+}
+
+export function webRModuleUrl(version = WEBR_VERSION) {
+  return `${webRBaseUrl(version)}webr.mjs`;
+}
+
 export const DEFAULT_SETTINGS = Object.freeze({
   theme: 'system',
+  webrVersion: WEBR_VERSION,
   editorTheme: 'crimson_editor',
   darkEditorTheme: 'one_dark',
   fontFamily: 'Ubuntu Mono',
@@ -38,7 +61,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   dockRatio: 51,
   activeSidebar: 'explorer',
   dockPanels: {
-    top: ['environment', 'outline', 'packages'],
+    top: ['environment', 'files', 'outline', 'packages'],
     bottom: ['plots', 'help', 'data', 'preview']
   },
   activeDock: { top: 'environment', bottom: 'plots' },

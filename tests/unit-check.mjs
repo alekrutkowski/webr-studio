@@ -7,8 +7,23 @@ import {
   acceptAceCompletionOrIndent, assignmentEqualsPositions, EditorManager,
   outlineFromSource, rMarkdownCode, rParserUnits, staticDiagnostics
 } from '../js/editor.js';
-import { parseCapturedOutput, WebREngine } from '../js/webr-engine.js';
+import {
+  normalizeRSource, normalizeVirtualPath, parseCapturedOutput, stripTerminalControlSequences, WebREngine
+} from '../js/webr-engine.js';
 import { ConsoleManager } from '../js/console.js';
+import {
+  normalizeWebRVersion, webRBaseUrl, webRModuleUrl
+} from '../js/config.js';
+
+assert.equal(normalizeWebRVersion('v0.6.0'), '0.6.0');
+assert.equal(normalizeWebRVersion(' latest '), 'latest');
+assert.throws(() => normalizeWebRVersion('main'), /latest.*release/i);
+assert.equal(webRBaseUrl('0.6.0'), 'https://webr.r-wasm.org/v0.6.0/');
+assert.equal(webRModuleUrl('latest'), 'https://webr.r-wasm.org/latest/webr.mjs');
+assert.equal(stripTerminalControlSequences('\x1b[?25h[1] 1'), '[1] 1');
+assert.equal(normalizeRSource('\uFEFFx <- 1\r\ny <- 2\rz <- 3\u2028z'), 'x <- 1\ny <- 2\nz <- 3\nz');
+assert.equal(normalizeVirtualPath('project\\results/../plots'), '/project/plots');
+assert.equal(normalizeVirtualPath('/../../project'), '/project');
 
 assert.equal(expressionState('mean(c(1, 2,').complete, false);
 assert.equal(expressionState('mean(c(1, 2))').complete, true);
@@ -134,6 +149,52 @@ assert.match(inlineExpression, /formatted <- as\.character\(value\)/);
 assert.match(inlineExpression, /collapse = "\\n"/);
 assert.equal(inlineEngine.running, false);
 
+const executeEngine = new WebREngine();
+let executeExpression = '';
+let submittedSource = '';
+const streamedExecuteItems = [];
+let releaseExecution;
+let resolveFirstOutput;
+const executionGate = new Promise(resolve => { releaseExecution = resolve; });
+const firstOutputSeen = new Promise(resolve => { resolveFirstOutput = resolve; });
+executeEngine.ready = true;
+executeEngine.emit = () => {};
+executeEngine.webR = {
+  FS: {
+    async writeFile(_path, bytes) { submittedSource = new TextDecoder().decode(bytes); },
+    async unlink() {}
+  },
+  async evalRVoid() {},
+  async evalRString() { return ''; }
+};
+executeEngine.collectSvgPlots = async () => [];
+executeEngine.readLastRunState = async () => ({ interrupted: false, ok: true, boundaryInterrupt: false });
+executeEngine.runReplCommand = async (expression, { token, onOutput }) => {
+  executeExpression = expression;
+  assert.match(token, /^execute_/);
+  await onOutput({ type: 'stdout', text: '[1] 1' });
+  resolveFirstOutput();
+  await executionGate;
+  await onOutput({ type: 'stdout', text: '[1] 2' });
+  return { interruptRequested: false };
+};
+const execution = executeEngine.execute('x <- 1\r\nfor (i in 1:2) print(i)\r', {
+  onOutput: async item => { streamedExecuteItems.push(item); }
+});
+await firstOutputSeen;
+assert.deepEqual(streamedExecuteItems, [{ type: 'stdout', text: '[1] 1' }], 'console output must arrive before execute() resolves');
+releaseExecution();
+const executeResult = await execution;
+assert.equal(submittedSource, 'x <- 1\nfor (i in 1:2) print(i)\n', 'console source must reach R with normalized line endings');
+assert.match(executeExpression, /\.webrStudio\$run_eval_file\(/);
+assert.deepEqual(streamedExecuteItems, [
+  { type: 'stdout', text: '[1] 1' },
+  { type: 'stdout', text: '[1] 2' }
+]);
+assert.deepEqual(executeResult.outputs, []);
+assert.equal(executeResult.streamed, true);
+assert.equal(executeEngine.running, false);
+
 const sourceEngine = new WebREngine();
 let sourceExpression = '';
 const streamedSourceItems = [];
@@ -141,15 +202,16 @@ sourceEngine.ready = true;
 sourceEngine.emit = () => {};
 sourceEngine.webR = {
   async evalRVoid() {},
-  async evalRBoolean() { return true; },
   async evalRString() { return ''; }
 };
 sourceEngine.collectSvgPlots = async () => [];
+sourceEngine.readLastRunState = async () => ({ interrupted: false, ok: true, boundaryInterrupt: false });
 sourceEngine.runReplCommand = async (expression, { token, onOutput }) => {
   sourceExpression = expression;
   assert.match(token, /^source_/);
   await onOutput({ type: 'command', text: 'x <- 1' });
   await onOutput({ type: 'stdout', text: '[1] 1' });
+  return { interruptRequested: false };
 };
 const sourceResult = await sourceEngine.sourceFile('scripts/analysis.R', {
   echo: true,
@@ -181,17 +243,250 @@ await replEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:ECHO>
 await replEngine.handleOutputMessage({ type: 'stdout', data: '[1] 1' });
 await replEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:DONE>>abc' });
 // Output queued immediately after the DONE boundary must still be delivered.
-// The primary R prompt, rather than DONE, is the definitive completion event.
-await replEngine.handleOutputMessage({ type: 'stdout', data: 'tail output' });
+// Completion also waits for the explicit stdout flush sentinel, even if the
+// primary prompt has already returned.
 await replEngine.handleOutputMessage({ type: 'prompt', data: '> ' });
+let replSettled = false;
+replRun.finally(() => { replSettled = true; });
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(replSettled, false);
+await replEngine.handleOutputMessage({ type: 'stdout', data: '\x1b[?25htail output<<WEBRSTUDIO:FLUSH>>abc' });
 await replRun;
 assert.match(replInput, /run_source/);
 assert.deepEqual(replItems, [
   { type: 'command', text: 'x <- 1' },
-  { type: 'stdout', text: '[1] 1' },
-  { type: 'stdout', text: 'tail output' }
-]);
+  { type: 'stdout', text: '[1] 1\ntail output' }
+], 'contiguous stream lines should be delivered in a browser-friendly batch');
 assert.equal(replEngine.replOperation, null);
+
+const boundaryEngine = new WebREngine();
+boundaryEngine.ready = true;
+boundaryEngine.replAtPrompt = true;
+boundaryEngine.webR = { writeConsole() {} };
+const firstBoundaryItems = [];
+const firstBoundary = boundaryEngine.runReplCommand('first', {
+  token: 'first',
+  onOutput: async item => firstBoundaryItems.push(item)
+});
+await new Promise(resolve => setImmediate(resolve));
+await boundaryEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:START>>first' });
+await boundaryEngine.handleOutputMessage({ type: 'stdout', data: '* point 3<<WEBRSTUDIO:FLUSH>>first' });
+await boundaryEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:DONE>>first' });
+await boundaryEngine.handleOutputMessage({ type: 'prompt', data: '> ' });
+await firstBoundary;
+
+const secondBoundaryItems = [];
+const secondBoundary = boundaryEngine.runReplCommand('second', {
+  token: 'second',
+  onOutput: async item => secondBoundaryItems.push(item)
+});
+await new Promise(resolve => setImmediate(resolve));
+await boundaryEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:START>>second' });
+await boundaryEngine.handleOutputMessage({ type: 'stdout', data: 'x | y\n--- | ---\n1 | 2<<WEBRSTUDIO:FLUSH>>second' });
+await boundaryEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:DONE>>second' });
+await boundaryEngine.handleOutputMessage({ type: 'prompt', data: '> ' });
+await secondBoundary;
+assert.deepEqual(firstBoundaryItems, [{ type: 'stdout', text: '* point 3' }]);
+assert.deepEqual(secondBoundaryItems, [{ type: 'stdout', text: 'x | y\n--- | ---\n1 | 2' }], 'partial stdout must not leak into the next R Markdown chunk');
+
+const finishingEngine = new WebREngine();
+let finishingInterruptCalls = 0;
+finishingEngine.running = true;
+finishingEngine.interruptSupported = true;
+finishingEngine.executionPhase = 'evaluating';
+finishingEngine.webR = { interrupt() { finishingInterruptCalls += 1; } };
+finishingEngine.replOperation = {
+  token: 'fast', operationName: 'execute', started: true, done: false,
+  flushed: false, prompt: false, interruptRequested: false
+};
+finishingEngine.preflightOutputMessages([
+  { type: 'stdout', data: '[1] 10000' },
+  { type: 'stdout', data: '<<WEBRSTUDIO:FLUSH>>fast' },
+  { type: 'stderr', data: '<<WEBRSTUDIO:DONE>>fast' },
+  { type: 'prompt', data: '> ' }
+]);
+assert.equal(finishingEngine.executionPhase, 'finalizing');
+assert.deepEqual(finishingEngine.requestInterrupt(), { ok: false, reason: 'finishing' });
+assert.equal(finishingInterruptCalls, 0, 'Stop must not interrupt a completed expression while its output is still rendering');
+
+const stalePromptEngine = new WebREngine();
+stalePromptEngine.ready = true;
+stalePromptEngine.replAtPrompt = true;
+stalePromptEngine.webR = { writeConsole() {} };
+const stalePromptItems = [];
+const stalePromptRun = stalePromptEngine.runReplCommand('new-command', {
+  token: 'new-command',
+  onOutput: async item => stalePromptItems.push(item)
+});
+await new Promise(resolve => setImmediate(resolve));
+const stalePromptBatch = [
+  { type: 'prompt', data: '> ' },
+  { type: 'stderr', data: '<<WEBRSTUDIO:START>>new-command' },
+  { type: 'stdout', data: '[1] 1<<WEBRSTUDIO:FLUSH>>new-command' },
+  { type: 'stderr', data: '<<WEBRSTUDIO:DONE>>new-command' }
+];
+stalePromptEngine.preflightOutputMessages(stalePromptBatch);
+assert.equal(stalePromptEngine.replOperation.started, false, 'preflight must not commit START before ordered handling');
+assert.equal(stalePromptEngine.replOperation.prompt, false, 'a stale prompt must remain uncommitted during preflight');
+for (const message of stalePromptBatch) stalePromptEngine.handleOutputMessage(message);
+let stalePromptSettled = false;
+stalePromptRun.finally(() => { stalePromptSettled = true; });
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(stalePromptSettled, false, 'a prompt queued before START must not complete the new command');
+stalePromptEngine.handleOutputMessage({ type: 'prompt', data: '> ' });
+await stalePromptRun;
+assert.deepEqual(stalePromptItems, [{ type: 'stdout', text: '[1] 1' }]);
+
+const interruptEngine = new WebREngine();
+let interruptCalls = 0;
+interruptEngine.running = true;
+interruptEngine.executionPhase = 'evaluating';
+interruptEngine.webR = { interrupt() { interruptCalls += 1; } };
+assert.equal(interruptEngine.interrupt(), false, 'PostMessage sessions must not claim that an interrupt was delivered');
+interruptEngine.interruptSupported = true;
+interruptEngine.replOperation = {
+  interruptRequested: false, started: true, done: false, prompt: false
+};
+assert.equal(interruptEngine.interrupt(), true);
+assert.equal(interruptCalls, 1);
+assert.equal(interruptEngine.replOperation.interruptRequested, true);
+
+const interruptedStreamEngine = new WebREngine();
+const interruptedStreamItems = [];
+let statePreservingInterrupts = 0;
+interruptedStreamEngine.ready = true;
+interruptedStreamEngine.running = true;
+interruptedStreamEngine.interruptSupported = true;
+interruptedStreamEngine.replAtPrompt = true;
+interruptedStreamEngine.webR = {
+  writeConsole() {},
+  interrupt() { statePreservingInterrupts += 1; }
+};
+const interruptedRun = interruptedStreamEngine.runReplCommand('long-running-command', {
+  token: 'interrupt-stream',
+  onOutput: async item => interruptedStreamItems.push(item)
+});
+await new Promise(resolve => setImmediate(resolve));
+await interruptedStreamEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:START>>interrupt-stream' });
+await interruptedStreamEngine.handleOutputMessage({ type: 'stdout', data: '[1] output before stop' });
+assert.equal(interruptedStreamEngine.interrupt(), true);
+await interruptedStreamEngine.handleOutputMessage({ type: 'stdout', data: '[2] already queued after stop' });
+await interruptedStreamEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:ERROR>>Execution interrupted' });
+await interruptedStreamEngine.handleOutputMessage({ type: 'stdout', data: '<<WEBRSTUDIO:FLUSH>>interrupt-stream' });
+await interruptedStreamEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:DONE>>interrupt-stream' });
+await interruptedStreamEngine.handleOutputMessage({ type: 'prompt', data: '> ' });
+await interruptedRun;
+assert.equal(statePreservingInterrupts, 1);
+assert.deepEqual(interruptedStreamItems, [
+  { type: 'stdout', text: '[1] output before stop\n[2] already queued after stop' }
+], 'interrupt must retain already-produced output while suppressing webR internal interrupt wording');
+assert.equal(interruptedStreamEngine.webR !== null, true, 'interrupt must retain the same worker');
+
+const stateInspectionEngine = new WebREngine();
+let stateInspectionCalls = 0;
+stateInspectionEngine.webR = {
+  async evalRString() {
+    stateInspectionCalls += 1;
+    if (stateInspectionCalls === 1) throw new Error('A non-local transfer of control occurred during evaluation');
+    return '0|1';
+  }
+};
+assert.deepEqual(await stateInspectionEngine.readLastRunState(), {
+  interrupted: false,
+  ok: true,
+  boundaryInterrupt: true
+}, 'an interrupt consumed after user evaluation must be classified as a late boundary interrupt');
+
+const virtualFilesEngine = new WebREngine();
+virtualFilesEngine.ready = true;
+virtualFilesEngine.evalStringArray = async expression => {
+  assert.match(expression, /list\.files/);
+  const record = fields => fields.map(value => encodeURIComponent(String(value))).join('\u001f');
+  return [
+    record(['plots', '/project/plots', 'TRUE', 0, 1700000000]),
+    record(['result.csv', '/project/result.csv', 'FALSE', 12, 1700000001])
+  ];
+};
+virtualFilesEngine.webR = {
+  FS: { async readFile(path) { assert.equal(path, '/project/result.csv'); return Uint8Array.from([1, 2, 3]); } }
+};
+const virtualListing = await virtualFilesEngine.listVirtualFiles('project\\results/..');
+assert.equal(virtualListing.path, '/project');
+assert.deepEqual(virtualListing.entries, [
+  { name: 'plots', path: '/project/plots', isDirectory: true, size: 0, modifiedAt: 1700000000000 },
+  { name: 'result.csv', path: '/project/result.csv', isDirectory: false, size: 12, modifiedAt: 1700000001000 }
+]);
+assert.deepEqual([...await virtualFilesEngine.readVirtualFile('/project/result.csv')], [1, 2, 3]);
+
+const submissionConsole = Object.create(ConsoleManager.prototype);
+let submissionValue = 'first command';
+let consoleReadOnly = false;
+let submitCalls = 0;
+const submitResolvers = [];
+submissionConsole.busy = false;
+submissionConsole.submissionEpoch = 0;
+submissionConsole.getValue = () => submissionValue;
+submissionConsole.setValue = value => { submissionValue = value; };
+submissionConsole.pushHistory = () => {};
+submissionConsole.appendEntry = async () => {};
+submissionConsole.setReadOnly = value => { consoleReadOnly = value; };
+submissionConsole.focus = () => {};
+submissionConsole.callbacks = {
+  onSubmit() {
+    submitCalls += 1;
+    return new Promise(resolve => submitResolvers.push(resolve));
+  }
+};
+const firstSubmission = submissionConsole.submit();
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(submissionConsole.busy, true);
+assert.equal(consoleReadOnly, true);
+submissionConsole.resetExecutionState();
+assert.equal(submissionConsole.busy, false);
+assert.equal(consoleReadOnly, false);
+submissionValue = 'second command';
+const secondSubmission = submissionConsole.submit();
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(submitCalls, 2);
+submitResolvers[0]();
+await firstSubmission;
+assert.equal(submissionConsole.busy, true, 'a stale submission must not unlock a newer one');
+assert.equal(consoleReadOnly, true, 'a stale submission must not make a newer submission editable');
+submitResolvers[1]();
+await secondSubmission;
+assert.equal(submissionConsole.busy, false);
+assert.equal(consoleReadOnly, false);
+
+const restartCancellationEngine = new WebREngine();
+const cancellationItems = [];
+restartCancellationEngine.ready = true;
+restartCancellationEngine.replAtPrompt = true;
+restartCancellationEngine.emit = () => {};
+restartCancellationEngine.webR = {
+  FS: {
+    async writeFile() {},
+    async unlink() {}
+  },
+  async evalRVoid() {},
+  writeConsole() {},
+  async close() {}
+};
+restartCancellationEngine.collectSvgPlots = async () => [];
+restartCancellationEngine.initialize = async function initializeAfterCancellation() {
+  this.ready = true;
+  this.webR = { close() {} };
+  return this;
+};
+const cancelledExecution = restartCancellationEngine.execute('while (TRUE) {}', {
+  onOutput: async item => cancellationItems.push(item)
+});
+await new Promise(resolve => setImmediate(resolve));
+await restartCancellationEngine.restart();
+const cancelledResult = await cancelledExecution;
+assert.equal(cancelledResult.cancelled, true);
+assert.equal(cancelledResult.error, 'Execution stopped.');
+assert.deepEqual(cancellationItems, [], 'An explicit restart must not print the internal worker-restart error.');
+assert.equal(restartCancellationEngine.running, false);
 
 const streamEntries = [];
 const streamBodies = new Map();
@@ -226,6 +521,47 @@ assert.deepEqual(streamEntries.map(({ type, text }) => ({ type, text })), [
   { type: 'command', text: 'x <- 1' },
   { type: 'output', text: '[1] 1' }
 ]);
+const previousAce = globalThis.ace;
+let highlightedTheme = '';
+globalThis.ace = {
+  config: {
+    set() {},
+    loadModule(id, callback) {
+      assert.equal(id, 'ace/ext/static_highlight');
+      callback({
+        render(code, mode, theme, lineStart, disableGutter, done) {
+          assert.equal(mode, 'ace/mode/r');
+          assert.equal(lineStart, 1);
+          assert.equal(disableGutter, true);
+          highlightedTheme = theme;
+          done({ html: `<span>${code}</span>` });
+        }
+      });
+    }
+  }
+};
+try {
+  assert.equal(await EditorManager.highlightR('x <- 1', 'dracula'), '<span>x <- 1</span>');
+  assert.equal(highlightedTheme, 'ace/theme/dracula');
+} finally {
+  if (previousAce === undefined) delete globalThis.ace;
+  else globalThis.ace = previousAce;
+}
+const themedConsole = Object.create(ConsoleManager.prototype);
+themedConsole.theme = 'crimson_editor';
+themedConsole.transcript = [{ type: 'command', text: 'x <- 1' }];
+let appliedConsoleTheme = '';
+let transcriptRenders = 0;
+themedConsole.editor = {
+  async setTheme(theme) { appliedConsoleTheme = theme; }
+};
+themedConsole.renderTranscript = async () => { transcriptRenders += 1; };
+await themedConsole.setTheme('dracula');
+assert.equal(themedConsole.theme, 'dracula');
+assert.equal(appliedConsoleTheme, 'ace/theme/dracula');
+assert.equal(transcriptRenders, 1);
+await themedConsole.setTheme('dracula');
+assert.equal(transcriptRenders, 1);
 
 const engine = new WebREngine();
 const trace = engine.cleanTraceback([
@@ -366,6 +702,13 @@ assert.deepEqual(parseCapturedOutput([
   { type: 'stderr', text: 'diagnostic line 3' }
 ], 'condition markers should split otherwise contiguous stream output');
 
+assert.deepEqual(parseCapturedOutput([
+  { type: 'stdout', data: '\x1b[?25h    x y' },
+  { type: 'stdout', data: '\x1b[?25h1   1 2' }
+]), [
+  { type: 'stdout', text: '    x y\n1   1 2' }
+], 'interactive cursor-control sequences must not reach console or R Markdown output');
+
 let debounceCalls = 0;
 const debounced = debounce(value => { debounceCalls += value; }, 1000);
 assert.equal(debounced.flush(), undefined);
@@ -376,4 +719,4 @@ assert.equal(debounceCalls, 2);
 assert.equal(debounced.pending(), false);
 debounced.cancel();
 
-console.log('Unit checks passed: expressions, help interception, R Markdown chunk options and figure sizing, inline code, lint context, completion acceptance, editor session stability, real-time sourcing, captured output, traceback cleanup, debounce state, outline, indentation, and delimited parsing.');
+console.log('Unit checks passed: expressions, help interception, R Markdown chunk options and figure sizing, inline code, lint context, completion acceptance, editor session stability, normalized and real-time console execution, output batching, phase-aware state-preserving interruption, runtime file browsing, restart-safe console editing, captured output, traceback cleanup, debounce state, outline, indentation, and delimited parsing.');
