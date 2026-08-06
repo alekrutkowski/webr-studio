@@ -8,10 +8,9 @@ The interface follows the visual system and interaction conventions popularised 
 
 Made with GPT-5.6-Sol-Pro.
 
-<img width="3204" height="2164" alt="image" src="https://github.com/user-attachments/assets/cb9897ef-250c-45a7-b7b1-90c8cd1a6914" />
+<img width="3204" height="2167" alt="image" src="https://github.com/user-attachments/assets/8e03bfbe-fdcc-422a-be4a-ace393eec91f" />
 
-<img width="3202" height="2160" alt="image" src="https://github.com/user-attachments/assets/a2468adc-8f96-4f6d-998d-d5e3a068d540" />
-
+<img width="3201" height="2167" alt="image" src="https://github.com/user-attachments/assets/c929425a-8cdb-41e7-8a68-b19461d32c95" />
 
 ## Highlights
 
