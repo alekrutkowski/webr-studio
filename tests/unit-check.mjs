@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {
-  currentRExpression, debounce, expressionState, extractHelpRequest, inlineRCodeSource, parseDelimited,
+  aceModeFromPath, currentRExpression, debounce, expressionState, extractHelpRequest, inlineRCodeSource, parseDelimited,
   resolveRMarkdownFigureOptions, smartIndentR, splitRMarkdown
 } from '../js/utils.js';
 import {
-  acceptAceCompletionOrIndent, assignmentEqualsPositions, EditorManager,
-  outlineFromSource, rMarkdownCode, rParserUnits, staticDiagnostics
+  acceptAceCompletionOrIndent, assignmentEqualsPositions, defineRMarkdownMode, EditorManager,
+  outlineFromSource, rMarkdownChunkRanges, rMarkdownCode, rParserUnits, staticDiagnostics
 } from '../js/editor.js';
 import {
   normalizeRSource, normalizeVirtualPath, parseCapturedOutput, stripTerminalControlSequences, WebREngine
@@ -24,6 +24,7 @@ assert.equal(stripTerminalControlSequences('\x1b[?25h[1] 1'), '[1] 1');
 assert.equal(normalizeRSource('\uFEFFx <- 1\r\ny <- 2\rz <- 3\u2028z'), 'x <- 1\ny <- 2\nz <- 3\nz');
 assert.equal(normalizeVirtualPath('project\\results/../plots'), '/project/plots');
 assert.equal(normalizeVirtualPath('/../../project'), '/project');
+assert.equal(aceModeFromPath('report.Rmd'), 'webr_rmarkdown');
 
 assert.equal(expressionState('mean(c(1, 2,').complete, false);
 assert.equal(expressionState('mean(c(1, 2))').complete, true);
@@ -41,6 +42,98 @@ assert.equal(masked.split('\n')[2], '');
 assert.equal(masked.split('\n')[5], 'x = T');
 const units = rParserUnits(rmd, 'report.Rmd');
 assert.deepEqual(units, [{ code: 'x = T\ny <- 1:length(x)', rowOffset: 5 }]);
+assert.deepEqual(rMarkdownChunkRanges(rmd), [{ startRow: 4, endRow: 7 }]);
+assert.deepEqual(rMarkdownChunkRanges([
+  '    ```{r literal}',
+  '    x <- 1',
+  '    ```',
+  '~~~{R actual, echo=FALSE}',
+  'x <- 2',
+  '~~~~',
+  '```{r unfinished}',
+  'y <- 3'
+].join('\n')), [
+  { startRow: 3, endRow: 5 },
+  { startRow: 6, endRow: 7 }
+]);
+
+const aceModules = new Map();
+const aceDefinitions = new Map();
+const aceLoads = [];
+const resolveAceId = (from, request) => {
+  if (!request.startsWith('.')) return request;
+  const parts = from.split('/');
+  parts.pop();
+  for (const part of request.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return parts.join('/');
+};
+const oop = {
+  inherits(child, parent) {
+    child.prototype = Object.create(parent.prototype);
+    child.prototype.constructor = child;
+  }
+};
+function MarkdownHighlightRules() {
+  this.$rules = { start: [{ token: 'text', regex: '.+' }] };
+  this.embedCalls = [];
+}
+MarkdownHighlightRules.prototype.embedRules = function embedRules(Rules, prefix, escapeRules) {
+  this.embedCalls.push({ Rules, prefix, escapeRules });
+  this.$rules[`${prefix}start`] = [];
+};
+MarkdownHighlightRules.prototype.normalizeRules = function normalizeRules() { this.normalized = true; };
+function RHighlightRules() {}
+function MarkdownMode() {
+  this.HighlightRules = MarkdownHighlightRules;
+  this.$tokenizer = { base: true };
+}
+const fakeAce = {
+  define(id, dependencies, factory) {
+    aceDefinitions.set(id, { dependencies, factory });
+  },
+  require(id) {
+    if (aceModules.has(id)) return aceModules.get(id);
+    const definition = aceDefinitions.get(id);
+    if (!definition) return null;
+    const exports = {};
+    const module = { exports };
+    aceModules.set(id, exports);
+    const localRequire = request => fakeAce.require(resolveAceId(id, request));
+    definition.factory(localRequire, exports, module);
+    aceModules.set(id, module.exports);
+    return module.exports;
+  },
+  config: {
+    loadModule(id, callback) {
+      aceLoads.push(id);
+      aceModules.set('ace/lib/oop', oop);
+      if (id === 'ace/mode/markdown') {
+        aceModules.set('ace/mode/markdown_highlight_rules', { MarkdownHighlightRules });
+        aceModules.set('ace/mode/markdown', { Mode: MarkdownMode });
+      } else if (id === 'ace/mode/r') {
+        aceModules.set('ace/mode/r_highlight_rules', { RHighlightRules });
+        aceModules.set('ace/mode/r', { Mode: function RMode() {} });
+      }
+      callback(aceModules.get(id));
+    }
+  }
+};
+const rMarkdownAceModule = await defineRMarkdownMode(fakeAce);
+assert.deepEqual(aceLoads, ['ace/mode/markdown', 'ace/mode/r']);
+const rMarkdownAceMode = new rMarkdownAceModule.Mode();
+assert.equal(rMarkdownAceMode.$id, 'ace/mode/webr_rmarkdown');
+assert.equal(rMarkdownAceMode.$tokenizer, null, 'the inherited Markdown tokenizer must be rebuilt with embedded R rules');
+const rMarkdownHighlightRules = new rMarkdownAceMode.HighlightRules();
+assert.equal(rMarkdownHighlightRules.$rules.start[0].next, 'r-start');
+assert.equal(rMarkdownHighlightRules.embedCalls[0].prefix, 'r-');
+assert.equal(rMarkdownHighlightRules.embedCalls[0].escapeRules[0].next, 'start');
+assert.equal(rMarkdownHighlightRules.normalized, true);
+await defineRMarkdownMode(fakeAce);
+assert.deepEqual(aceLoads, ['ace/mode/markdown', 'ace/mode/r'], 'a registered R Markdown mode must be reused');
 const rmdDiagnostics = staticDiagnostics(rmd, 'report.Rmd');
 assert.equal(rmdDiagnostics.some(item => item.row === 2), false);
 assert.equal(rmdDiagnostics.some(item => item.row === 5 && item.source === 'correctness/logical-shorthand'), true);
@@ -665,6 +758,55 @@ fakeEditorManager.rainbowMarkers = [21];
 fakeEditorManager.clearRainbowMarkers();
 assert.deepEqual(markerOwner.removed, [11, 12, 21]);
 
+const rmdMarkerRanges = [];
+const rmdMarkerSession = {
+  removed: [],
+  getLine(row) { return ['```{r}', 'x <- 1', '```'][row] || ''; },
+  addMarker(range, className, type, inFront) {
+    rmdMarkerRanges.push({
+      start: { row: range.start.row, column: range.start.column },
+      end: { row: range.end.row, column: range.end.column },
+      className,
+      type,
+      inFront
+    });
+    return 31;
+  },
+  removeMarker(value) { this.removed.push(value); }
+};
+const rmdMarkerManager = Object.create(EditorManager.prototype);
+rmdMarkerManager.fallbackMode = false;
+rmdMarkerManager.activePath = 'report.Rmd';
+rmdMarkerManager.rMarkdownChunkMarkers = [];
+rmdMarkerManager.rMarkdownChunkMarkerSession = null;
+rmdMarkerManager.ace = {
+  require(id) {
+    assert.equal(id, 'ace/range');
+    return {
+      Range: class Range {
+        constructor(startRow, startColumn, endRow, endColumn) {
+          this.start = { row: startRow, column: startColumn };
+          this.end = { row: endRow, column: endColumn };
+        }
+      }
+    };
+  }
+};
+rmdMarkerManager.editor = {
+  session: rmdMarkerSession,
+  getValue: () => '```{r}\nx <- 1\n```'
+};
+rmdMarkerManager.updateRMarkdownChunkMarkers();
+assert.deepEqual(rmdMarkerRanges, [{
+  start: { row: 0, column: 0 },
+  end: { row: 2, column: 3 },
+  className: 'rmarkdown-chunk-background',
+  type: 'fullLine',
+  inFront: false
+}]);
+rmdMarkerManager.clearRMarkdownChunkMarkers();
+assert.deepEqual(rmdMarkerSession.removed, [31]);
+
 assert.deepEqual(parseCapturedOutput([
   { type: 'stdout', data: 'first line\nsecond line\n' },
   { type: 'stderr', data: 'ordinary stderr\n<<WEBRSTUDIO:MESSAGE>>hello\n<<WEBRSTUDIO:WARNING>>careful\n' },
@@ -719,4 +861,4 @@ assert.equal(debounceCalls, 2);
 assert.equal(debounced.pending(), false);
 debounced.cancel();
 
-console.log('Unit checks passed: expressions, help interception, R Markdown chunk options and figure sizing, inline code, lint context, completion acceptance, editor session stability, normalized and real-time console execution, output batching, phase-aware state-preserving interruption, runtime file browsing, restart-safe console editing, captured output, traceback cleanup, debounce state, outline, indentation, and delimited parsing.');
+console.log('Unit checks passed: expressions, help interception, R Markdown grammar loading, chunk highlighting, chunk options and figure sizing, inline code, lint context, completion acceptance, editor session stability, normalized and real-time console execution, output batching, phase-aware state-preserving interruption, runtime file browsing, restart-safe console editing, captured output, traceback cleanup, debounce state, outline, indentation, and delimited parsing.');

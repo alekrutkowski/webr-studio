@@ -1,16 +1,16 @@
 import {
   APP_VERSION, DEFAULT_SETTINGS, MAX_EDITOR_BYTES, MAX_FILE_BYTES,
   MAX_URL_STATE_CHARS, SAMPLE_FILES, WEBR_VERSION_SUGGESTIONS, normalizeWebRVersion
-} from './config.js';
-import { workspaceDB } from './db.js';
+} from './config.js?v=1.2.11';
+import { workspaceDB } from './db.js?v=1.2.11';
 import {
   WebREngine, describeRuntime, environmentTypeLabel, normalizeVirtualPath, stripTerminalControlSequences
-} from './webr-engine.js';
-import { EditorManager } from './editor.js';
-import { ConsoleManager } from './console.js';
-import { DataViewer } from './data-viewer.js';
-import { createGist, importGist } from './gist.js';
-import { UI } from './ui.js';
+} from './webr-engine.js?v=1.2.11';
+import { EditorManager } from './editor.js?v=1.2.11';
+import { ConsoleManager } from './console.js?v=1.2.11';
+import { DataViewer } from './data-viewer.js?v=1.2.11';
+import { createGist, importGist } from './gist.js?v=1.2.11';
+import { UI } from './ui.js?v=1.2.11';
 import {
   $, $$, basename, base64UrlToBytes, bytesToBase64Url, clamp, copyText, createZip,
   debounce, decodeWorkspaceState, dirname, downloadBlob, downloadText,
@@ -19,7 +19,7 @@ import {
   makeUniqueName, mimeFromPath, mistralCodeUrl, normalizePath, rasterizeSvg,
   readFileAsBytes, readFileAsText, renderMarkdown, renderMathInElement, inlineRCodeSource, safeOpen, sanitizeHtml,
   resolveRMarkdownFigureOptions, sanitizeSvg, splitRMarkdown, uid
-} from './utils.js';
+} from './utils.js?v=1.2.11';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();

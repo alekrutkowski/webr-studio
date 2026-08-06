@@ -142,7 +142,7 @@ export function modeFromPath(path = '') {
 
 export function aceModeFromPath(path = '') {
   const mode = modeFromPath(path);
-  if (mode === 'rmarkdown') return 'rmarkdown';
+  if (mode === 'rmarkdown') return 'webr_rmarkdown';
   if (mode === 'csv' || mode === 'tsv') return 'text';
   return mode;
 }

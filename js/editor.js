@@ -1,9 +1,11 @@
 import {
   aceModeFromPath, basename, currentRExpression, debounce, escapeHtml,
   expressionState, extname, smartIndentR, stripRCommentsAndStrings
-} from './utils.js';
+} from './utils.js?v=1.2.11';
 
 const ACE_CDN = 'https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict';
+const R_MARKDOWN_MODE_ID = 'ace/mode/webr_rmarkdown';
+const R_MARKDOWN_RULES_ID = 'ace/mode/webr_rmarkdown_highlight_rules';
 
 const R_KEYWORDS = [
   'if', 'else', 'repeat', 'while', 'function', 'for', 'in', 'next', 'break',
@@ -71,6 +73,13 @@ function defineCrimsonTheme(ace) {
 .ace-crimson-editor .ace_comment {color:#8b8789;font-style:italic}
 .ace-crimson-editor .ace_variable {color:#3c315e}
 .ace-crimson-editor .ace_variable.ace_language {color:#8d2750}
+.ace-crimson-editor .ace_markup.ace_heading {color:#8f1239;font-weight:700}
+.ace-crimson-editor .ace_markup.ace_list {color:#a30f43;font-weight:600}
+.ace-crimson-editor .ace_markup.ace_quote {color:#706b6e;font-style:italic}
+.ace-crimson-editor .ace_markup.ace_bold {font-weight:700}
+.ace-crimson-editor .ace_markup.ace_italic {font-style:italic}
+.ace-crimson-editor .ace_markup.ace_raw {color:#36536b}
+.ace-crimson-editor .ace_string.ace_other.ace_link,.ace-crimson-editor .ace_constant.ace_other.ace_reference.ace_link {color:#075c73;text-decoration:underline}
 .ace-crimson-editor .ace_fold {background:#9f1239;border-color:#9f1239}
 .ace-crimson-editor .ace_indent-guide {background:linear-gradient(to bottom,#ece6e8 50%,transparent 50%) right repeat-y;background-size:1px 4px}
 .ace-crimson-editor .ace_gutter-cell.ace_breakpoint {border-left:3px solid #9f1239}
@@ -82,15 +91,40 @@ function defineCrimsonTheme(ace) {
 }
 
 
-function defineRMarkdownMode(ace) {
+function existingAceModule(ace, id) {
   try {
-    if (ace.require('ace/mode/rmarkdown')) return;
+    return ace.require(id) || null;
   } catch {
-    // Register the embedded Markdown/R mode below.
+    return null;
   }
+}
+
+function loadAceModule(ace, id) {
+  const existing = existingAceModule(ace, id);
+  if (existing) return Promise.resolve(existing);
+  return new Promise((resolve, reject) => {
+    ace.config.loadModule(id, loaded => {
+      const module = loaded || existingAceModule(ace, id);
+      if (module) resolve(module);
+      else reject(new Error(`Ace module could not be loaded: ${id}`));
+    });
+  });
+}
+
+async function defineRMarkdownMode(ace) {
+  const existing = existingAceModule(ace, R_MARKDOWN_MODE_ID);
+  if (existing?.Mode) return existing;
+
+  // A custom Ace module does not automatically fetch unresolved dependencies.
+  // Load the stock Markdown and R modes first so the embedded grammar is ready
+  // before any .Rmd session is created.
+  await Promise.all([
+    loadAceModule(ace, 'ace/mode/markdown'),
+    loadAceModule(ace, 'ace/mode/r')
+  ]);
 
   ace.define(
-    'ace/mode/rmarkdown_highlight_rules',
+    R_MARKDOWN_RULES_ID,
     [
       'require', 'exports', 'module', 'ace/lib/oop',
       'ace/mode/markdown_highlight_rules', 'ace/mode/r_highlight_rules'
@@ -104,7 +138,7 @@ function defineRMarkdownMode(ace) {
         MarkdownHighlightRules.call(this);
         this.$rules.start.unshift({
           token: 'support.function.codebegin',
-          regex: '^ {0,3}(?:`{3,}|~{3,})\\s*\\{r(?:[^}]*)\\}\\s*$',
+          regex: '^ {0,3}(?:`{3,}|~{3,})[ \\t]*\\{[rR](?:[ \\t,][^}]*)?\\}[ \\t]*$',
           next: 'r-start'
         });
         this.embedRules(RHighlightRules, 'r-', [{
@@ -120,24 +154,29 @@ function defineRMarkdownMode(ace) {
   );
 
   ace.define(
-    'ace/mode/rmarkdown',
+    R_MARKDOWN_MODE_ID,
     [
       'require', 'exports', 'module', 'ace/lib/oop',
-      'ace/mode/markdown', 'ace/mode/rmarkdown_highlight_rules'
+      'ace/mode/markdown', R_MARKDOWN_RULES_ID
     ],
     (require, exports) => {
       const oop = require('../lib/oop');
       const MarkdownMode = require('./markdown').Mode;
-      const RMarkdownHighlightRules = require('./rmarkdown_highlight_rules').RMarkdownHighlightRules;
+      const RMarkdownHighlightRules = require('./webr_rmarkdown_highlight_rules').RMarkdownHighlightRules;
       const Mode = function Mode() {
         MarkdownMode.call(this);
         this.HighlightRules = RMarkdownHighlightRules;
-        this.$id = 'ace/mode/rmarkdown';
+        this.$tokenizer = null;
+        this.$id = R_MARKDOWN_MODE_ID;
       };
       oop.inherits(Mode, MarkdownMode);
       exports.Mode = Mode;
     }
   );
+
+  const registered = existingAceModule(ace, R_MARKDOWN_MODE_ID);
+  if (!registered?.Mode) throw new Error('The R Markdown editor mode could not be registered.');
+  return registered;
 }
 
 function waitForAce(timeout = 8000) {
@@ -187,6 +226,37 @@ function rMarkdownCode(source) {
     }
     return inRChunk ? line : '';
   }).join('\n');
+}
+
+function rMarkdownChunkRanges(source) {
+  const lines = String(source).split('\n');
+  const ranges = [];
+  let openingRow = -1;
+  let fenceCharacter = '';
+  let fenceLength = 0;
+
+  for (let row = 0; row < lines.length; row += 1) {
+    const line = lines[row];
+    if (openingRow < 0) {
+      const opening = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*\{[rR](?:[ \t,][^}]*)?\}[ \t]*$/);
+      if (!opening) continue;
+      openingRow = row;
+      fenceCharacter = opening[1][0];
+      fenceLength = opening[1].length;
+      continue;
+    }
+
+    const trimmed = line.replace(/^ {0,3}/, '');
+    const closing = trimmed.match(/^(`+|~+)[ \t]*$/);
+    if (!closing || closing[1][0] !== fenceCharacter || closing[1].length < fenceLength) continue;
+    ranges.push({ startRow: openingRow, endRow: row });
+    openingRow = -1;
+    fenceCharacter = '';
+    fenceLength = 0;
+  }
+
+  if (openingRow >= 0) ranges.push({ startRow: openingRow, endRow: Math.max(openingRow, lines.length - 1) });
+  return ranges;
 }
 
 function rParserUnits(source, path = '') {
@@ -355,6 +425,8 @@ export class EditorManager extends EventTarget {
     this.activePath = null;
     this.rainbowMarkers = [];
     this.rainbowMarkerSession = null;
+    this.rMarkdownChunkMarkers = [];
+    this.rMarkdownChunkMarkerSession = null;
     this.lintMarkers = [];
     this.lintMarkerSession = null;
     this.parserLintToken = 0;
@@ -374,6 +446,7 @@ export class EditorManager extends EventTarget {
       this.completionIndexDebounced();
     }, 180);
     this.rainbowDebounced = debounce(() => this.updateRainbowMarkers(), 100);
+    this.rMarkdownChunksDebounced = debounce(() => this.updateRMarkdownChunkMarkers(), 80);
   }
 
   async initialize() {
@@ -384,8 +457,8 @@ export class EditorManager extends EventTarget {
       this.ace.config.set('themePath', ACE_CDN);
       this.ace.config.set('workerPath', ACE_CDN);
       defineCrimsonTheme(this.ace);
-      defineRMarkdownMode(this.ace);
-      await new Promise(resolve => this.ace.config.loadModule('ace/ext/language_tools', resolve));
+      await defineRMarkdownMode(this.ace);
+      await loadAceModule(this.ace, 'ace/ext/language_tools');
       this.editor = this.ace.edit(this.host);
       this.dormantSession = this.ace.createEditSession('', 'ace/mode/text');
       this.dormantSession.setUseWorker(false);
@@ -431,6 +504,7 @@ export class EditorManager extends EventTarget {
       this.lintDebounced();
       this.outlineDebounced();
       this.rainbowDebounced();
+      this.rMarkdownChunksDebounced();
     });
     this.editor.selection.on('changeCursor', () => {
       const position = this.editor.getCursorPosition();
@@ -619,6 +693,14 @@ export class EditorManager extends EventTarget {
     catch { await this.editor.setTheme('ace/theme/crimson_editor'); }
   }
 
+  editorModeForPath(path) {
+    const mode = aceModeFromPath(path);
+    if (mode !== 'webr_rmarkdown') return `ace/mode/${mode}`;
+    const Mode = existingAceModule(this.ace, R_MARKDOWN_MODE_ID)?.Mode;
+    if (!Mode) throw new Error('The R Markdown editor mode is unavailable.');
+    return new Mode();
+  }
+
   addOrUpdateFile(file, { syncContent = false, createSession = false } = {}) {
     const previous = this.files.get(file.path);
     this.files.set(file.path, { ...previous, ...file });
@@ -644,8 +726,7 @@ export class EditorManager extends EventTarget {
       return;
     }
     if (!createSession) return;
-    const mode = aceModeFromPath(file.path);
-    const session = this.ace.createEditSession(String(file.content || ''), `ace/mode/${mode}`);
+    const session = this.ace.createEditSession(String(file.content || ''), this.editorModeForPath(file.path));
     session.setTabSize(this.settings.tabSize);
     session.setUseSoftTabs(true);
     session.setUseWrapMode(this.settings.wordWrap);
@@ -658,6 +739,7 @@ export class EditorManager extends EventTarget {
     if (item && this.activePath === path) this.deactivate();
     if (item?.session === this.lintMarkerSession) this.clearDiagnostics();
     if (item?.session === this.rainbowMarkerSession) this.clearRainbowMarkers();
+    if (item?.session === this.rMarkdownChunkMarkerSession) this.clearRMarkdownChunkMarkers();
     try { item?.session?.destroy?.(); } catch { /* Session disposal is best effort. */ }
     this.sessions.delete(path);
     this.files.delete(path);
@@ -674,11 +756,14 @@ export class EditorManager extends EventTarget {
       if (item) {
         this.sessions.delete(oldPath);
         item.file.path = newPath;
-        item.session.setMode(`ace/mode/${aceModeFromPath(newPath)}`);
+        item.session.setMode(this.editorModeForPath(newPath));
         this.sessions.set(newPath, item);
       }
     }
-    if (this.activePath === oldPath) this.activePath = newPath;
+    if (this.activePath === oldPath) {
+      this.activePath = newPath;
+      this.updateRMarkdownChunkMarkers();
+    }
   }
 
   open(path, { row, column } = {}) {
@@ -712,6 +797,7 @@ export class EditorManager extends EventTarget {
     this.updateOutline();
     this.runDiagnostics();
     this.updateRainbowMarkers();
+    this.updateRMarkdownChunkMarkers();
     return true;
   }
 
@@ -730,8 +816,10 @@ export class EditorManager extends EventTarget {
     this.outlineDebounced.cancel();
     this.completionIndexDebounced.cancel();
     this.rainbowDebounced.cancel();
+    this.rMarkdownChunksDebounced.cancel();
     this.clearDiagnostics();
     this.clearRainbowMarkers();
+    this.clearRMarkdownChunkMarkers();
     this.outline = [];
     this.callbacks.onOutline?.([]);
     this.callbacks.onDiagnostics?.([]);
@@ -1003,6 +1091,32 @@ export class EditorManager extends EventTarget {
     return true;
   }
 
+  clearRMarkdownChunkMarkers() {
+    const session = this.rMarkdownChunkMarkerSession || this.editor?.session;
+    this.rMarkdownChunkMarkers.forEach(marker => session?.removeMarker?.(marker));
+    this.rMarkdownChunkMarkers = [];
+    this.rMarkdownChunkMarkerSession = null;
+  }
+
+  updateRMarkdownChunkMarkers() {
+    if (this.fallbackMode || !this.editor) return;
+    this.clearRMarkdownChunkMarkers();
+    if (!this.activePath || extname(this.activePath) !== 'rmd') return;
+    const ranges = rMarkdownChunkRanges(this.editor.getValue());
+    if (!ranges.length) return;
+    const Range = this.ace.require('ace/range').Range;
+    this.rMarkdownChunkMarkerSession = this.editor.session;
+    for (const { startRow, endRow } of ranges) {
+      const endColumn = this.editor.session.getLine(endRow)?.length || 0;
+      this.rMarkdownChunkMarkers.push(this.editor.session.addMarker(
+        new Range(startRow, 0, endRow, endColumn),
+        'rmarkdown-chunk-background',
+        'fullLine',
+        false
+      ));
+    }
+  }
+
   clearRainbowMarkers() {
     const session = this.rainbowMarkerSession || this.editor?.session;
     this.rainbowMarkers.forEach(marker => session?.removeMarker?.(marker));
@@ -1095,4 +1209,7 @@ export class EditorManager extends EventTarget {
   }
 }
 
-export { assignmentEqualsPositions, outlineFromSource, rMarkdownCode, rParserUnits, staticDiagnostics, symbolAt };
+export {
+  assignmentEqualsPositions, defineRMarkdownMode, outlineFromSource, rMarkdownChunkRanges, rMarkdownCode,
+  rParserUnits, staticDiagnostics, symbolAt
+};

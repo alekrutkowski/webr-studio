@@ -1,4 +1,4 @@
-import { $, escapeHtml } from './utils.js';
+import { $, escapeHtml } from './utils.js?v=1.2.11';
 
 function svg(id) {
   return `<svg class="ui-icon" aria-hidden="true"><use href="#${id}"></use></svg>`;

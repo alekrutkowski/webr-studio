@@ -81,6 +81,29 @@ assert.ok(versionMatch, 'js/config.js must declare APP_VERSION.');
 const appVersion = versionMatch[1];
 const packageMetadata = JSON.parse(read('package.json'));
 assert.equal(packageMetadata.version, appVersion, 'package.json and APP_VERSION must agree.');
+assert.match(config, /export const WEBR_VERSION_SUGGESTIONS\s*=/, 'The configuration module must export webR version suggestions.');
+
+for (const file of jsFiles) {
+  const source = readFileSync(file, 'utf8');
+  const localImports = [
+    ...source.matchAll(/(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"](\.[^'"]+\.js(?:\?[^'"]*)?)['"]/g),
+    ...source.matchAll(/import\(\s*['"](\.[^'"]+\.js(?:\?[^'"]*)?)['"]\s*\)/g)
+  ].map(match => match[1]);
+  for (const specifier of localImports) {
+    assert.match(
+      specifier,
+      new RegExp(`\\?v=${appVersion.replaceAll('.', '\\.')}$`),
+      `Local browser module imported by ${relative(root, file)} must be pinned to application version ${appVersion}: ${specifier}`
+    );
+  }
+}
+assert.match(html, new RegExp(`styles\\.css\\?v=${appVersion.replaceAll('.', '\\.')}`), 'CSS cache key must match APP_VERSION.');
+assert.match(html, new RegExp(`js/app\\.js\\?v=${appVersion.replaceAll('.', '\\.')}`), 'Application module cache key must match APP_VERSION.');
+assert.match(html, new RegExp(`coi-serviceworker\\.js\\?v=${appVersion.replaceAll('.', '\\.')}`), 'Service-worker bootstrap cache key must match APP_VERSION.');
+const serviceWorkerSource = read('coi-serviceworker.js');
+assert.match(serviceWorkerSource, /registration\.update\(\)/, 'The page bootstrap must check for service-worker updates even when already isolated.');
+assert.match(serviceWorkerSource, /cache:\s*'no-store'/, 'Application shell requests must bypass stale browser caches.');
+assert.match(serviceWorkerSource, /Cache-Control['"],\s*['"]no-store/, 'Application shell responses must not be cached across releases.');
 
 assert.match(config, /WEBR_VERSION\s*=\s*['"]0\.6\.0['"]/, 'webR 0.6.0 should remain the default runtime.');
 assert.match(config, /normalizeWebRVersion/, 'webR release identifiers must be validated.');
@@ -125,7 +148,11 @@ assert.match(consoleSource, /enableLiveAutocompletion:\s*true/, 'Console live co
 assert.match(editorSource, /acceptCompletionOrIndent/, 'Tab should explicitly accept editor completions.');
 assert.match(consoleSource, /consoleAcceptCompletionOrIndent/, 'Tab should explicitly accept console completions.');
 assert.match(editorSource, /defineRMarkdownMode/, 'The editor must register a dedicated R Markdown mode.');
+assert.match(editorSource, /await Promise\.all\(\[[\s\S]*loadAceModule\(ace, 'ace\/mode\/markdown'\)[\s\S]*loadAceModule\(ace, 'ace\/mode\/r'\)/, 'The stock Markdown and R modes must load before the embedded R Markdown grammar is registered.');
 assert.match(editorSource, /embedRules\(RHighlightRules, 'r-'/, 'R highlighting must be embedded only inside R Markdown chunks.');
+assert.match(editorSource, /editorModeForPath\(path\)[\s\S]*return new Mode\(\)/, 'Rmd sessions must receive the already-registered custom mode rather than falling back to plain text.');
+assert.match(editorSource, /rMarkdownChunkRanges[\s\S]*rmarkdown-chunk-background/, 'R Markdown chunks must receive dedicated full-line background markers.');
+assert.match(styles, /\.ace_editor(?:\.ace_dark)? \.ace_marker-layer \.rmarkdown-chunk-background[\s\S]*background:/, 'R Markdown chunk backgrounds must be styled in the live editor.');
 assert.match(appSource, /buildSelfContainedPreviewHtml/, 'Rendered Markdown must support self-contained HTML export.');
 assert.match(appSource, /renderMathInElement/, 'Markdown rendering must process dollar-delimited maths.');
 assert.match(appSource, /evaluateInlineR/, 'R Markdown rendering must evaluate inline R expressions.');

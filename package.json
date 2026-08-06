@@ -1,6 +1,6 @@
 {
   "name": "webr-studio",
-  "version": "1.2.9",
+  "version": "1.2.11",
   "private": true,
   "description": "A fast, browser-native R IDE powered by webR.",
   "license": "MIT",

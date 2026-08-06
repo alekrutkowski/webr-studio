@@ -1,8 +1,8 @@
 import {
   debounce, escapeHtml, expressionState, formatDuration, mistralErrorUrl,
   safeOpen, copyText, smartIndentR
-} from './utils.js';
-import { acceptAceCompletionOrIndent, EditorManager } from './editor.js';
+} from './utils.js?v=1.2.11';
+import { acceptAceCompletionOrIndent, EditorManager } from './editor.js?v=1.2.11';
 
 const CONSOLE_KEYWORDS = [
   'if', 'else', 'for', 'while', 'repeat', 'function', 'return', 'next', 'break',

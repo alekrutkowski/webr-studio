@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.11 – 2026-08-06
+
+- Fixed `.Rmd` editor sessions falling back to plain text by loading Ace's Markdown and R dependencies before registering the embedded R Markdown grammar.
+- Rebuilt the inherited Markdown tokenizer with R highlighting inside fenced `{r}` chunks.
+- Added theme-aware full-line shading for R code chunks in light, dark, and high-contrast editor themes.
+- Extended the Crimson Editor theme with Markdown headings, lists, quotations, emphasis, raw-code, and link styling.
+
+## 1.2.10 – 2026-08-06
+
+- Prevented mixed-release ES modules after reload by cache-busting every internal JavaScript dependency, not only the top-level app module.
+- Added a regression check requiring `WEBR_VERSION_SUGGESTIONS` to remain exported by the configuration module.
+- Made the cross-origin-isolation bootstrap check for service-worker updates even when the page is already isolated.
+- Revalidated same-origin application shell files through the service worker so updated HTML, JavaScript, CSS, and manifests cannot remain stale across releases.
+
 ## 1.2.9 – 2026-08-06
 
 - Normalized Windows, classic-Mac, and Unicode line endings before console evaluation, and handed multiline commands to R through a temporary UTF-8 file.

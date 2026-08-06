@@ -616,6 +616,19 @@ button.status-item:hover { color: var(--text); background: var(--surface-hover);
 .ace_search { border: 1px solid var(--border) !important; border-radius: 0 0 var(--radius-md) var(--radius-md) !important; background: var(--surface-raised) !important; box-shadow: var(--shadow-md) !important; }
 .ace_search input { color: var(--text) !important; background: var(--surface) !important; border-color: var(--border) !important; }
 .ace_search button { color: var(--text-muted) !important; background-color: var(--surface-muted) !important; border-color: var(--border) !important; }
+.ace_editor .ace_marker-layer .rmarkdown-chunk-background {
+  position: absolute;
+  background: rgba(159, 18, 57, .055);
+  box-shadow: inset 2px 0 rgba(159, 18, 57, .22);
+}
+.ace_editor.ace_dark .ace_marker-layer .rmarkdown-chunk-background {
+  background: rgba(244, 63, 112, .065);
+  box-shadow: inset 2px 0 rgba(244, 63, 112, .28);
+}
+:root[data-resolved-theme="high-contrast"] .ace_editor .ace_marker-layer .rmarkdown-chunk-background {
+  background: rgba(255, 92, 143, .11);
+  box-shadow: inset 2px 0 rgba(255, 128, 168, .7);
+}
 .ace_marker-layer [class*="rainbow-delimiter-"] { position: absolute; border-radius: 2px; }
 .ace_marker-layer .rainbow-delimiter-0 { background: color-mix(in srgb, #d94675 20%, transparent); }
 .ace_marker-layer .rainbow-delimiter-1 { background: color-mix(in srgb, #2d8fca 20%, transparent); }
