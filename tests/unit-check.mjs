@@ -14,6 +14,9 @@ import { ConsoleManager } from '../js/console.js';
 import {
   normalizeWebRVersion, webRBaseUrl, webRModuleUrl
 } from '../js/config.js';
+import {
+  evaluateInlineRMarkdown, gfmBundleFiles, gfmCodeFence, RMarkdownGfmBuilder
+} from '../js/rmd-gfm.js';
 
 assert.equal(normalizeWebRVersion('v0.6.0'), '0.6.0');
 assert.equal(normalizeWebRVersion(' latest '), 'latest');
@@ -142,6 +145,74 @@ assert.equal(rmdDiagnostics.some(item => item.row === 6 && item.source === 'corr
 assert.equal(inlineRCodeSource('r 2 + 2'), '2 + 2');
 assert.equal(inlineRCodeSource(' r 2 + 2'), '');
 assert.equal(inlineRCodeSource('python 2 + 2'), '');
+
+const inlineGfm = await evaluateInlineRMarkdown([
+  'Inline result: `r 2 + 2`.',
+  '',
+  '```r',
+  '`r must_not_run()`',
+  '```',
+  '    `r also_must_not_run()`',
+  '> ```r',
+  '> `r quoted_fence_must_not_run()`',
+  '> ```'
+].join('\n'), async source => {
+  assert.equal(source, '2 + 2');
+  return '4';
+});
+assert.equal(inlineGfm.evaluated, 1);
+assert.match(inlineGfm.preview, /class="inline-r-output"[^>]*>4<\/span>/);
+assert.match(inlineGfm.gfm, /Inline result: 4\./);
+assert.match(inlineGfm.gfm, /`r must_not_run\(\)`/);
+assert.match(inlineGfm.gfm, /`r also_must_not_run\(\)`/);
+assert.match(inlineGfm.gfm, /`r quoted_fence_must_not_run\(\)`/);
+assert.equal(gfmCodeFence('x <- "```"', 'r').startsWith('````r\n'), true, 'GFM code fences must expand around embedded backticks');
+
+const blankLineBuilder = new RMarkdownGfmBuilder({ stem: 'spacing.Rmd' });
+blankLineBuilder.appendChunk({
+  code: 'cat("first\n\n\n\nsecond")',
+  result: { ok: true, outputs: [{ type: 'stdout', text: 'first\n\n\n\nsecond' }] }
+});
+assert.match(blankLineBuilder.build().markdown, /first\n\n\n\nsecond/, 'GFM export must preserve intentional blank lines inside fenced code and output.');
+
+const gfmBuilder = new RMarkdownGfmBuilder({ stem: 'analysis.Rmd', title: 'Analysis' });
+gfmBuilder.appendMarkdown('Intro with $x^2$.');
+gfmBuilder.appendChunk({
+  label: 'summary plot',
+  code: 'print(summary(x))\nplot(x)',
+  options: { message: false },
+  result: {
+    ok: true,
+    outputs: [
+      { type: 'stdout', text: '[1] 1 2 3' },
+      { type: 'message', text: 'hidden message' },
+      { type: 'warning', text: 'sample warning' }
+    ],
+    traceback: []
+  },
+  plots: [{ svg: '<svg viewBox="0 0 1 1"></svg>' }],
+  caption: 'Summary figure'
+});
+gfmBuilder.appendChunk({
+  label: 'asis',
+  code: 'cat("| x | y |")',
+  options: { echo: false, results: 'asis' },
+  result: { ok: true, outputs: [{ type: 'stdout', text: '| x | y |\n|---|---|\n| 1 | 2 |' }] },
+  plots: []
+});
+const gfmBundle = gfmBuilder.build();
+assert.match(gfmBundle.markdown, /^# Analysis\n/);
+assert.match(gfmBundle.markdown, /```r\nprint\(summary\(x\)\)\nplot\(x\)\n```/);
+assert.match(gfmBundle.markdown, /Warning: sample warning/);
+assert.doesNotMatch(gfmBundle.markdown, /hidden message/);
+assert.match(gfmBundle.markdown, /\| x \| y \|\n\|---\|---\|/);
+assert.match(gfmBundle.markdown, /!\[Summary figure\]\(analysis_files\/figure-gfm\/summary-plot-1\.svg\)/);
+assert.equal(gfmBundle.assets.length, 1);
+assert.equal(gfmBundle.assets[0].name, 'analysis_files/figure-gfm/summary-plot-1.svg');
+assert.deepEqual(gfmBundleFiles(gfmBundle).map(file => file.name), [
+  'analysis.md',
+  'analysis_files/figure-gfm/summary-plot-1.svg'
+]);
 
 assert.deepEqual(extractHelpRequest('?lm'), { topic: 'lm', package: '' });
 assert.deepEqual(extractHelpRequest('?stats::lm'), { topic: 'lm', package: 'stats' });
@@ -861,4 +932,4 @@ assert.equal(debounceCalls, 2);
 assert.equal(debounced.pending(), false);
 debounced.cancel();
 
-console.log('Unit checks passed: expressions, help interception, R Markdown grammar loading, chunk highlighting, chunk options and figure sizing, inline code, lint context, completion acceptance, editor session stability, normalized and real-time console execution, output batching, phase-aware state-preserving interruption, runtime file browsing, restart-safe console editing, captured output, traceback cleanup, debounce state, outline, indentation, and delimited parsing.');
+console.log('Unit checks passed: expressions, help interception, R Markdown grammar loading, chunk highlighting, chunk options and figure sizing, GFM ZIP bundles, inline code, lint context, completion acceptance, editor session stability, normalized and real-time console execution, output batching, phase-aware state-preserving interruption, runtime file browsing, restart-safe console editing, captured output, traceback cleanup, debounce state, outline, indentation, and delimited parsing.');

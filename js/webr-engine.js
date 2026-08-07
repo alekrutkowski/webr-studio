@@ -1,7 +1,7 @@
 import {
   WEBR_VERSION, normalizeWebRVersion, webRBaseUrl, webRModuleUrl
-} from './config.js?v=1.2.11';
-import { rString, rVector, rName, normalizePath, dirname, formatBytes } from './utils.js?v=1.2.11';
+} from './config.js?v=1.2.12';
+import { rString, rVector, rName, normalizePath, dirname, formatBytes } from './utils.js?v=1.2.12';
 
 const MARKER_LINE = /^<<WEBRSTUDIO:(MESSAGE|WARNING|ERROR|INFO|VIEW|ECHO)>>(.*)$/;
 const RUNTIME_CANCELLATION = 'WebRRuntimeCancellation';

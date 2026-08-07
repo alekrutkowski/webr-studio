@@ -1,7 +1,7 @@
 import {
   $, debounce, downloadBlob, downloadText, escapeHtml, inferColumnType,
   parseDelimited, basename, copyText
-} from './utils.js?v=1.2.11';
+} from './utils.js?v=1.2.12';
 
 function buttonIcon(id, className = '') {
   const classes = ['ui-icon', className].filter(Boolean).join(' ');

@@ -1,7 +1,7 @@
 import {
   aceModeFromPath, basename, currentRExpression, debounce, escapeHtml,
   expressionState, extname, smartIndentR, stripRCommentsAndStrings
-} from './utils.js?v=1.2.11';
+} from './utils.js?v=1.2.12';
 
 const ACE_CDN = 'https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict';
 const R_MARKDOWN_MODE_ID = 'ace/mode/webr_rmarkdown';

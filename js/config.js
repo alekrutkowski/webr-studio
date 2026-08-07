@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.2.11';
+export const APP_VERSION = '1.2.12';
 export const WEBR_VERSION = '0.6.0';
 export const WEBR_VERSION_SUGGESTIONS = Object.freeze([
   'latest', '0.6.0', '0.5.9', '0.5.8', '0.5.7', '0.5.6'

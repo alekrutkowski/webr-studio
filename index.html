@@ -12,8 +12,8 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preconnect" href="https://webr.r-wasm.org" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=1.2.11">
-  <script src="coi-serviceworker.js?v=1.2.11"></script>
+  <link rel="stylesheet" href="styles.css?v=1.2.12">
+  <script src="coi-serviceworker.js?v=1.2.12"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict/ace.js"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/dompurify@3.2.7/dist/purify.min.js"></script>
@@ -373,6 +373,7 @@
                 <div class="toolbar-spacer"></div>
                 <button id="refresh-preview-button" class="button secondary compact"><svg class="ui-icon"><use href="#i-refresh"></use></svg><span>Render</span></button>
                 <button id="download-preview-html" class="button secondary compact" title="Download a self-contained HTML file"><svg class="ui-icon"><use href="#i-download"></use></svg><span>HTML</span></button>
+                <button id="download-preview-gfm" class="button secondary compact" title="Download GitHub-flavored Markdown and generated images as a ZIP" hidden disabled><svg class="ui-icon"><use href="#i-download"></use></svg><span>GFM ZIP</span></button>
                 <button id="open-preview-window" class="mini-icon" title="Open preview in new window"><svg class="ui-icon"><use href="#i-external"></use></svg></button>
               </div>
               <article id="document-preview" class="document-preview prose empty-state"><svg class="ui-icon"><use href="#i-book"></use></svg><p>Markdown and R Markdown previews appear here.</p></article>
@@ -523,6 +524,6 @@
     </article>
   </template>
 
-  <script type="module" src="js/app.js?v=1.2.11"></script>
+  <script type="module" src="js/app.js?v=1.2.12"></script>
 </body>
 </html>

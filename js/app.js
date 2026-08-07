@@ -1,25 +1,28 @@
 import {
   APP_VERSION, DEFAULT_SETTINGS, MAX_EDITOR_BYTES, MAX_FILE_BYTES,
   MAX_URL_STATE_CHARS, SAMPLE_FILES, WEBR_VERSION_SUGGESTIONS, normalizeWebRVersion
-} from './config.js?v=1.2.11';
-import { workspaceDB } from './db.js?v=1.2.11';
+} from './config.js?v=1.2.12';
+import { workspaceDB } from './db.js?v=1.2.12';
 import {
   WebREngine, describeRuntime, environmentTypeLabel, normalizeVirtualPath, stripTerminalControlSequences
-} from './webr-engine.js?v=1.2.11';
-import { EditorManager } from './editor.js?v=1.2.11';
-import { ConsoleManager } from './console.js?v=1.2.11';
-import { DataViewer } from './data-viewer.js?v=1.2.11';
-import { createGist, importGist } from './gist.js?v=1.2.11';
-import { UI } from './ui.js?v=1.2.11';
+} from './webr-engine.js?v=1.2.12';
+import { EditorManager } from './editor.js?v=1.2.12';
+import { ConsoleManager } from './console.js?v=1.2.12';
+import { DataViewer } from './data-viewer.js?v=1.2.12';
+import { createGist, importGist } from './gist.js?v=1.2.12';
+import { UI } from './ui.js?v=1.2.12';
+import {
+  evaluateInlineRMarkdown, gfmBundleFiles, gfmDocumentStem, RMarkdownGfmBuilder
+} from './rmd-gfm.js?v=1.2.12';
 import {
   $, $$, basename, base64UrlToBytes, bytesToBase64Url, clamp, copyText, createZip,
   debounce, decodeWorkspaceState, dirname, downloadBlob, downloadText,
   encodeWorkspaceState, ensureFontLoaded, escapeHtml, extname, extractHelpRequest, formatBytes,
   formatDate, idle, isDataPath, isPreviewable, isTextPath, localTimestampName,
   makeUniqueName, mimeFromPath, mistralCodeUrl, normalizePath, rasterizeSvg,
-  readFileAsBytes, readFileAsText, renderMarkdown, renderMathInElement, inlineRCodeSource, safeOpen, sanitizeHtml,
+  readFileAsBytes, readFileAsText, renderMarkdown, renderMathInElement, safeOpen, sanitizeHtml,
   resolveRMarkdownFigureOptions, sanitizeSvg, splitRMarkdown, uid
-} from './utils.js?v=1.2.11';
+} from './utils.js?v=1.2.12';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -183,6 +186,7 @@ class WebRStudioApp {
     this.currentHelpTopic = '';
     this.currentHelpPackage = '';
     this.previewObjectUrls = [];
+    this.rMarkdownGfmArtifact = null;
     this.currentPlotUrl = '';
     this.plotResizeObserver = null;
     this.lastPlotDeviceSize = null;
@@ -502,6 +506,7 @@ class WebRStudioApp {
     on('#refresh-preview-button', 'click', () => this.previewActiveFile());
     on('#open-preview-window', 'click', () => this.openPreviewWindow());
     on('#download-preview-html', 'click', () => this.downloadRenderedDocument());
+    on('#download-preview-gfm', 'click', () => this.downloadRMarkdownGfmBundle());
     on('#environment-clean-button', 'click', () => this.clearEnvironment());
     on('#refresh-active-panel', 'click', () => this.refreshActiveTopPanel());
     on('#install-package-button', 'click', () => this.installPackage());
@@ -653,7 +658,8 @@ class WebRStudioApp {
         { label: 'Jump to definition', icon: 'i-code', shortcut: 'F12', action: () => this.editor.jumpToDefinition() },
         { label: 'Function help', icon: 'i-help', shortcut: 'F1', action: () => this.openHelp(this.editor.getSymbolAtCursor()) },
         { label: 'Check my code with Mistral', icon: 'i-sparkles', action: () => this.checkCodeWithMistral() },
-        { label: 'Render Markdown / R Markdown', icon: 'i-book', action: () => this.previewActiveFile() }
+        { label: 'Render Markdown / R Markdown', icon: 'i-book', action: () => this.previewActiveFile() },
+        { label: 'Export R Markdown as GFM ZIP', icon: 'i-download', disabled: extname(this.activePath || '') !== 'rmd', action: () => this.downloadRMarkdownGfmBundle() }
       ],
       session: [
         { label: 'Stop execution', icon: 'i-stop', disabled: !this.engine.running, action: () => this.stopExecution() },
@@ -851,6 +857,10 @@ class WebRStudioApp {
     file.updatedAt = Date.now();
     file.revision = (Number(file.revision) || 0) + 1;
     file.dirty = true;
+    if (this.rMarkdownGfmArtifact?.sourcePath === path && this.rMarkdownGfmArtifact.sourceDocument !== content) {
+      this.rMarkdownGfmArtifact = null;
+      $('#download-preview-gfm').disabled = extname(path) !== 'rmd';
+    }
     $('#save-status').textContent = 'Saving changes…';
     this.markFileDirtyUi(path);
     this.autosaveDebounced();
@@ -1307,6 +1317,10 @@ class WebRStudioApp {
     const previewable = Boolean(file && isPreviewable(path));
     renderButton.hidden = !previewable;
     renderButton.disabled = !previewable;
+    const gfmButton = $('#download-preview-gfm');
+    const rMarkdown = Boolean(file && extname(path) === 'rmd');
+    gfmButton.hidden = !rMarkdown;
+    gfmButton.disabled = !rMarkdown;
     const sourceable = Boolean(file && extname(path) === 'r');
     $('#run-selection-button').disabled = !this.runtimeAvailable || !file;
     $('#run-script-button').disabled = !this.runtimeAvailable || !sourceable;
@@ -2344,13 +2358,21 @@ class WebRStudioApp {
     this.activatePanel('preview');
     const source = path === this.activePath && this.editor ? this.editor.getValue() : String(file.content || '');
     const frontMatter = splitDocumentFrontMatter(source);
+    const isRMarkdown = extname(path) === 'rmd';
     $('#preview-title').textContent = frontMatter.title || path;
     const preview = $('#document-preview');
     this.revokePreviewUrls();
+    this.rMarkdownGfmArtifact = null;
     $('#download-preview-html').disabled = true;
+    $('#download-preview-gfm').hidden = !isRMarkdown;
+    $('#download-preview-gfm').disabled = true;
     try {
-      if (extname(path) === 'rmd') {
-        await this.renderRMarkdown(frontMatter.body, preview);
+      if (isRMarkdown) {
+        await this.renderRMarkdown(frontMatter.body, preview, {
+          sourcePath: path,
+          sourceDocument: source,
+          title: frontMatter.title
+        });
       } else {
         preview.className = 'document-preview prose';
         preview.innerHTML = renderMarkdown(frontMatter.body);
@@ -2361,18 +2383,41 @@ class WebRStudioApp {
       return true;
     } finally {
       $('#download-preview-html').disabled = false;
+      $('#download-preview-gfm').disabled = !isRMarkdown;
     }
   }
 
-  async renderRMarkdown(source, preview) {
+  async renderRMarkdown(source, preview, context = {}) {
     preview.className = 'document-preview prose';
     preview.replaceChildren();
     const blocks = splitRMarkdown(source);
+    const sourcePath = context.sourcePath || this.previewPath || this.activePath || 'document.Rmd';
+    const gfm = new RMarkdownGfmBuilder({
+      stem: gfmDocumentStem(sourcePath),
+      title: context.title || ''
+    });
+    const commitGfmArtifact = () => {
+      this.rMarkdownGfmArtifact = {
+        ...gfm.build(),
+        sourcePath,
+        sourceDocument: String(context.sourceDocument ?? source)
+      };
+    };
+    const renderMarkdownBlock = async content => {
+      const inline = await evaluateInlineRMarkdown(
+        content,
+        this.engine.ready && !this.engine.running ? expression => this.engine.evaluateInline(expression) : null
+      );
+      gfm.appendMarkdown(inline.gfm);
+      const section = document.createElement('section');
+      section.innerHTML = renderMarkdown(inline.preview);
+      renderMathInElement(section);
+      preview.append(...section.childNodes);
+    };
     if (!blocks.some(block => block.type === 'r')) {
-      preview.innerHTML = renderMarkdown(source);
-      await this.evaluateInlineR(preview);
-      renderMathInElement(preview);
+      await renderMarkdownBlock(source);
       this.bindPreviewLinks(preview);
+      commitGfmArtifact();
       return;
     }
 
@@ -2460,13 +2505,16 @@ class WebRStudioApp {
       preview.append(note);
       for (const block of blocks) {
         if (block.type === 'markdown') {
-          const section = document.createElement('section');
-          section.innerHTML = renderMarkdown(block.content);
-          renderMathInElement(section);
-          preview.append(...section.childNodes);
+          await renderMarkdownBlock(block.content);
           continue;
         }
         const options = normalizedOptions(block.options);
+        gfm.appendChunk({
+          label: block.label,
+          code: block.content,
+          options,
+          result: null
+        });
         if (options.include === false || options.echo === false) continue;
         const chunk = document.createElement('section');
         chunk.className = 'r-chunk';
@@ -2478,6 +2526,7 @@ class WebRStudioApp {
         preview.append(chunk);
       }
       this.bindPreviewLinks(preview);
+      commitGfmArtifact();
       return;
     }
     if (this.engine.running) {
@@ -2490,11 +2539,7 @@ class WebRStudioApp {
     try {
       for (const block of blocks) {
         if (block.type === 'markdown') {
-          const section = document.createElement('section');
-          section.innerHTML = renderMarkdown(block.content);
-          await this.evaluateInlineR(section);
-          renderMathInElement(section);
-          preview.append(...section.childNodes);
+          await renderMarkdownBlock(block.content);
           continue;
         }
 
@@ -2513,13 +2558,18 @@ class WebRStudioApp {
           if (options.echo !== false) await appendSource(chunk, block.content);
         }
 
+        let result = null;
+        let gfmPlots = [];
         if (shouldEvaluate) {
-          const result = await this.engine.execute(block.content, {
+          result = await this.engine.execute(block.content, {
             plotWidth: figure.width,
             plotHeight: figure.height
           });
           if (result.cancelled) return;
           await this.handleViewOutputs(result);
+          gfmPlots = (result.plots || [])
+            .map(plot => ({ svg: sanitizeSvg(plot.svg) }))
+            .filter(plot => plot.svg);
           if (include) {
             const asis = [];
             const flushAsis = () => {
@@ -2548,10 +2598,26 @@ class WebRStudioApp {
           }
         }
 
+        gfm.appendChunk({
+          label: block.label,
+          code: block.content,
+          options,
+          result: result ? {
+            ...result,
+            outputs: (result.outputs || []).map(item => ({
+              ...item,
+              text: stripTerminalControlSequences(item.text || '')
+            }))
+          } : null,
+          plots: gfmPlots,
+          caption: figure.caption
+        });
+
         if (include) preview.append(chunk);
       }
       renderMathInElement(preview);
       this.bindPreviewLinks(preview);
+      commitGfmArtifact();
       await this.refreshEnvironment();
       this.runtimeFilesRefreshPending = true;
       if ($('#panel-files')?.classList.contains('active')) {
@@ -2571,34 +2637,6 @@ class WebRStudioApp {
       $('#refresh-preview-button').disabled = false;
     }
   }
-
-
-  async evaluateInlineR(container) {
-    const candidates = [...container.querySelectorAll('code')]
-      .filter(node => !node.closest('pre'))
-      .map(node => ({ node, source: inlineRCodeSource(node.textContent) }))
-      .filter(item => item.source);
-    if (!candidates.length) return 0;
-    if (!this.engine.ready) return 0;
-
-    let evaluated = 0;
-    for (const { node, source } of candidates) {
-      const replacement = document.createElement('span');
-      replacement.title = `R: ${source}`;
-      try {
-        const value = await this.engine.evaluateInline(source);
-        replacement.className = 'inline-r-output';
-        replacement.textContent = value;
-        evaluated += 1;
-      } catch (error) {
-        replacement.className = 'inline-r-error';
-        replacement.textContent = `🧯 ${error.message || String(error)}`;
-      }
-      node.replaceWith(replacement);
-    }
-    return evaluated;
-  }
-
   bindPreviewLinks(container) {
     container.querySelectorAll('a[href]').forEach(link => {
       const href = link.getAttribute('href') || '';
@@ -2754,6 +2792,42 @@ class WebRStudioApp {
       this.ui.toast('Rendered HTML downloaded', `${stem}.html is self-contained, with styles and SVG graphics inline.`, 'success');
     } catch (error) {
       this.ui.toast('HTML export failed', error.message || String(error), 'error', 0);
+    }
+  }
+
+  async downloadRMarkdownGfmBundle() {
+    try {
+      const path = this.activePath;
+      const file = path ? this.files.get(path) : null;
+      if (!file || extname(path) !== 'rmd') {
+        this.ui.toast('No R Markdown document', 'Open an .Rmd file before exporting GitHub-flavored Markdown.', 'info');
+        return;
+      }
+
+      const source = path === this.activePath && this.editor
+        ? this.editor.getValue()
+        : String(file.content || '');
+      const artifact = this.rMarkdownGfmArtifact;
+      if (!artifact || artifact.sourcePath !== path || artifact.sourceDocument !== source) {
+        const rendered = await this.previewActiveFile(path);
+        if (!rendered) return;
+      }
+
+      const bundle = this.rMarkdownGfmArtifact;
+      if (!bundle || bundle.sourcePath !== path || bundle.sourceDocument !== source) {
+        throw new Error('The R Markdown document could not be rendered into a GitHub Markdown bundle.');
+      }
+
+      const filename = `${bundle.stem}-gfm.zip`;
+      downloadBlob(createZip(gfmBundleFiles(bundle)), filename);
+      const imageCount = bundle.assets.length;
+      this.ui.toast(
+        'GitHub Markdown bundle downloaded',
+        `${filename} contains ${bundle.stem}.md${imageCount ? ` and ${imageCount} generated image${imageCount === 1 ? '' : 's'}` : ''}.`,
+        'success'
+      );
+    } catch (error) {
+      this.ui.toast('GFM export failed', error.message || String(error), 'error', 0);
     }
   }
 
@@ -3330,6 +3404,7 @@ class WebRStudioApp {
       { title: 'Install R package', detail: 'Packages', icon: 'i-plus', action: () => this.installPackage() },
       { title: 'Browse runtime files', detail: 'webR filesystem', icon: 'i-folder', action: () => this.activatePanel('files') },
       { title: 'Render Markdown or R Markdown', detail: 'Preview', icon: 'i-book', action: () => this.previewActiveFile() },
+      { title: 'Export R Markdown as GFM ZIP', detail: 'Document', icon: 'i-download', disabled: extname(this.activePath || '') !== 'rmd', action: () => this.downloadRMarkdownGfmBundle() },
       { title: 'Share workspace as URL', detail: 'Workspace', icon: 'i-link', action: () => this.shareWorkspaceUrl() },
       { title: 'Export project JSON', detail: 'Workspace', icon: 'i-download', action: () => this.exportWorkspaceJson() },
       { title: 'Create workspace snapshot', detail: 'Workspace', icon: 'i-database', action: () => this.createSnapshot() },

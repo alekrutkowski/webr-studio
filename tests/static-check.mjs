@@ -121,6 +121,7 @@ assert.match(html, /id="new-file-button"[^>]*aria-haspopup="menu"/, 'The toolbar
 assert.match(html, /id="sidebar-new-file"[^>]*aria-haspopup="menu"/, 'The Explorer New button must expose file-type choices.');
 assert.match(html, /id="preview-active-button"[\s\S]*?>[\s\S]*?<span>Render<\/span>/, 'Markdown files need a clear editor Render button.');
 assert.match(html, /id="download-preview-html"/, 'Rendered documents need a self-contained HTML download button.');
+assert.match(html, /id="download-preview-gfm"/, 'R Markdown previews need a GitHub-flavored Markdown ZIP download button.');
 assert.match(html, /id="webr-version-input"[^>]*list="webr-version-options"/, 'R execution settings need a webR version selector.');
 assert.match(html, /id="apply-webr-version"/, 'The selected webR version needs an explicit restart action.');
 assert.equal((html.match(/data-maximize-pane=/g) || []).length >= 8, true, 'Every major workbench pane needs a maximize control.');
@@ -132,6 +133,8 @@ for (const id of ['editor-more-button', 'dock-more-top', 'dock-more-bottom']) {
 const appSource = read('js/app.js');
 assert.match(appSource, /showNewFileMenu/, 'New-file buttons must open a menu.');
 assert.match(appSource, /createRMarkdownFile/, 'The IDE must provide an Rmd creation action.');
+assert.match(appSource, /downloadRMarkdownGfmBundle/, 'The IDE must export evaluated R Markdown as a GFM bundle.');
+assert.match(appSource, /gfmBundleFiles/, 'The GFM export must package Markdown and generated images together.');
 assert.ok(appSource.indexOf("label: 'New Rmd file'") < appSource.indexOf("label: 'New R script'"), 'New Rmd file must appear above New R script.');
 assert.match(appSource, /NEW_RMD_TEMPLATE[\s\S]*output: html_document/, 'New Rmd files should start with a renderable header.');
 assert.match(appSource, /\$\$\('\.menu-trigger\[data-menu\]'\)/, 'Only named application-menu buttons may receive the generic application-menu handler.');
