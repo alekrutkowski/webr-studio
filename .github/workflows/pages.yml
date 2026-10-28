@@ -39,6 +39,7 @@ jobs:
           mkdir -p _site
           cp index.html 404.html styles.css coi-serviceworker.js icon.svg manifest.webmanifest .nojekyll _site/
           cp -R js _site/js
+          cp -R vendor _site/vendor
       - name: Upload static site
         uses: actions/upload-pages-artifact@v5
         with:

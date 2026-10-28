@@ -1,7 +1,7 @@
 import {
   WEBR_VERSION, normalizeWebRVersion, webRBaseUrl, webRModuleUrl
-} from './config.js?v=1.2.12';
-import { rString, rVector, rName, normalizePath, dirname, formatBytes } from './utils.js?v=1.2.12';
+} from './config.js?v=1.5.4';
+import { rString, rVector, rName, normalizePath, dirname, formatBytes } from './utils.js?v=1.5.4';
 
 const MARKER_LINE = /^<<WEBRSTUDIO:(MESSAGE|WARNING|ERROR|INFO|VIEW|ECHO)>>(.*)$/;
 const RUNTIME_CANCELLATION = 'WebRRuntimeCancellation';
@@ -22,6 +22,132 @@ export function normalizeVirtualPath(value = '/project') {
     else parts.push(part);
   }
   return `/${parts.join('/')}` || '/';
+}
+
+// Paths selected from the runtime are POSIX names. Preserve spaces and literal
+// backslashes so an action cannot accidentally address a different file.
+export function explicitVirtualPath(value) {
+  if (typeof value !== 'string' || !value.length || value.includes('\0')) {
+    throw new Error('A valid runtime file path is required');
+  }
+  const parts = [];
+  for (const part of value.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join('/')}`;
+}
+
+// Persisted project keys are literal POSIX names, not user-entered paths.
+// Never turn a backslash into a directory separator or allow an escape.
+export function projectRelativePath(value) {
+  if (typeof value !== 'string' || !value.length || value.startsWith('/') ||
+      explicitVirtualPath(`/project/${value}`) !== `/project/${value}`) {
+    throw new Error('Choose a canonical file path inside /project without parent-directory segments.');
+  }
+  return value;
+}
+
+// This function is evaluated inside the webR worker. Listing uses only lstat
+// and readdir; even large download bodies stay in the runtime's filesystem.
+function runtimeFileOperation({ operation, path }) {
+  const runtime = typeof Module !== 'undefined' ? Module : globalThis.Module;
+  const fs = runtime?.FS;
+  if (!fs || typeof fs.lstat !== 'function' || typeof fs.readdir !== 'function') {
+    throw new Error('This webR runtime does not support file inspection');
+  }
+  const inspect = target => {
+    try { return fs.lstat(target); }
+    catch (error) {
+      // Emscripten uses errno 44 for ENOENT. Other failures must be reported,
+      // rather than mistaken for an absent file or an empty directory.
+      if (error?.code === 'ENOENT' || error?.errno === 44) return null;
+      throw error;
+    }
+  };
+  const checkedStat = target => {
+    let current = '';
+    let info = inspect('/');
+    const parts = target.split('/').filter(Boolean);
+    for (let index = 0; index < parts.length; index += 1) {
+      current += `/${parts[index]}`;
+      info = inspect(current);
+      if (!info) return null;
+      if (fs.isLink(info.mode)) throw new Error(`Symbolic links are not supported: ${current}`);
+      if (index < parts.length - 1 && !fs.isDir(info.mode)) {
+        throw new Error(`Path component is not a directory: ${current}`);
+      }
+    }
+    return info;
+  };
+  const metadata = (target, info) => {
+    const isDirectory = fs.isDir(info.mode);
+    if (!isDirectory && !fs.isFile(info.mode)) return null;
+    return {
+      name: target.slice(target.lastIndexOf('/') + 1),
+      path: target,
+      isDirectory,
+      size: isDirectory ? 0 : Number(info.size) || 0,
+      modifiedAt: Number(info.mtime) || 0
+    };
+  };
+  if (operation === 'mkdir') {
+    let current = '';
+    for (const part of path.split('/').filter(Boolean)) {
+      current += `/${part}`;
+      const existing = inspect(current);
+      if (!existing) fs.mkdir(current);
+      else if (fs.isLink(existing.mode) || !fs.isDir(existing.mode)) {
+        throw new Error(`Not a regular directory: ${current}`);
+      }
+    }
+    return path;
+  }
+  const info = checkedStat(path);
+  if (operation === 'stat') {
+    if (!info) return null;
+    const result = metadata(path, info);
+    if (!result) throw new Error(`Not a regular file or directory: ${path}`);
+    return result;
+  }
+  if (operation === 'delete') {
+    if (!info) throw new Error(`File does not exist: ${path}`);
+    if (!fs.isFile(info.mode)) throw new Error(`Only individual regular files can be deleted: ${path}`);
+    // Validation, unlink, and verification run synchronously in the same
+    // worker operation; an R expression cannot replace the target in between.
+    fs.unlink(path);
+    if (inspect(path)) throw new Error(`The runtime did not remove the file: ${path}`);
+    return path;
+  }
+  if (operation !== 'list') throw new Error('Unknown runtime file operation');
+  if (!info && path === '/project') {
+    fs.mkdir('/project');
+    return { path, entries: [] };
+  }
+  if (!info || !fs.isDir(info.mode)) throw new Error(`Directory does not exist: ${path}`);
+  const entries = [];
+  const directories = [path];
+  for (let index = 0; index < directories.length; index += 1) {
+    const directory = directories[index];
+    const children = [];
+    for (const name of fs.readdir(directory)) {
+      if (name === '.' || name === '..' || name.includes('/') || name.includes('\0')) continue;
+      const target = `${directory === '/' ? '' : directory}/${name}`;
+      const child = inspect(target);
+      if (!child || fs.isLink(child.mode)) continue;
+      const entry = metadata(target, child);
+      if (entry) children.push(entry);
+    }
+    children.sort((left, right) => Number(right.isDirectory) - Number(left.isDirectory)
+      || left.name.toLowerCase().localeCompare(right.name.toLowerCase())
+      || left.name.localeCompare(right.name));
+    for (const entry of children) {
+      entries.push(entry);
+      if (entry.isDirectory) directories.push(entry.path);
+    }
+  }
+  return { path, entries };
 }
 
 function isInterruptLikeError(error) {
@@ -132,7 +258,7 @@ function parseCapturedOutput(items = []) {
 }
 
 export class WebREngine extends EventTarget {
-  constructor({ version = WEBR_VERSION } = {}) {
+  constructor({ version = WEBR_VERSION, networkBridge = null } = {}) {
     super();
     this.webR = null;
     this.module = null;
@@ -154,8 +280,11 @@ export class WebREngine extends EventTarget {
     this.replOperation = null;
     this.replAtPrompt = false;
     this.promptWaiters = new Set();
+    this.pendingConsoleInput = null;
+    this.consoleInputSequence = 0;
     this.executionPhase = 'idle';
     this.lastInterruptResult = { ok: false, reason: 'not-running' };
+    this.networkBridge = networkBridge;
   }
 
   emit(type, detail = {}) {
@@ -190,6 +319,19 @@ export class WebREngine extends EventTarget {
     this.plotWidth = plotWidth;
     this.plotHeight = plotHeight;
     try {
+      let downloadBridgeAvailable = false;
+      if (this.networkBridge) {
+        this.emit('network', { ready: false });
+        try {
+          // The R Blob worker must be created after this page has a service
+          // worker controller, so its synchronous downloads use that bridge.
+          await this.networkBridge.initialize();
+          downloadBridgeAvailable = true;
+        } catch (error) {
+          this.emit('network', { ready: false, error });
+          if (this.networkBridge.required) throw error;
+        }
+      }
       onProgress(12, 'Loading the webR runtime…');
       this.module = await import(this.moduleUrl);
       const { WebR } = this.module;
@@ -202,6 +344,15 @@ export class WebREngine extends EventTarget {
       await this.webR.evalRVoid(`dir.create("/project", recursive = TRUE, showWarnings = FALSE); setwd("/project")`);
       onProgress(74, 'Installing IDE helpers…');
       await this.installHelpers();
+      if (downloadBridgeAvailable) {
+        try {
+          await this.networkBridge.install(this.webR);
+          this.emit('network', { ready: true });
+        } catch (error) {
+          this.emit('network', { ready: false, error });
+          if (this.networkBridge.required) throw error;
+        }
+      }
       await this.setPlotSize(plotWidth, plotHeight);
       this.version = String(this.webR.version || this.requestedVersion);
       this.rVersion = String(this.webR.versionR || await this.webR.evalRString('R.version.string'));
@@ -231,6 +382,117 @@ local({
   }
   e <- new.env(parent = baseenv())
   assign(".webrStudio", e, envir = .GlobalEnv)
+  # Route both ordinary and utils::install.packages() through the same binary
+  # installer as the Packages pane. The general webR shim also changes library()
+  # and require(); the adapters here leave package loading unchanged.
+  install_packages <- function(pkgs, lib = NULL, repos = NULL, quiet = FALSE, info = NULL, mount = TRUE) {
+    webr::install(packages = pkgs, lib = lib, repos = repos, quiet = quiet, info = info, mount = mount)
+  }
+  environment(install_packages) <- baseenv()
+  # Native download.packages() selects a CRAN mirror and then forces libcurl
+  # for its default bulk download. Download compatible archives serially using
+  # webR's supported download.file() path, without installing or loading them.
+  download_packages <- function(pkgs, destdir, available = NULL, repos = NULL,
+                                contriburl = NULL,
+                                method = getOption("download.file.method", default = "auto"),
+                                type = "binary", ...) {
+    if (missing(destdir)) {
+      stop(paste(
+        "download.packages() needs 'destdir'.",
+        "Use install.packages(pkgs) to install, or",
+        "download.packages(pkgs, destdir = getwd()) to save WebAssembly package archives."
+      ), call. = FALSE)
+    }
+    if (!is.character(destdir) || length(destdir) != 1L || is.na(destdir) ||
+        !nzchar(destdir) || !dir.exists(destdir)) {
+      stop("'destdir' must be an existing directory in the R filesystem.", call. = FALSE)
+    }
+    if (!is.character(type) || length(type) != 1L || is.na(type) ||
+        !type %in% c("binary", "emscripten.binary")) {
+      stop(paste(
+        "webR Studio downloads WebAssembly package archives;",
+        "'type' must be 'binary' or 'emscripten.binary'."
+      ), call. = FALSE)
+    }
+    if (!is.character(pkgs) || anyNA(pkgs) || any(!nzchar(pkgs))) {
+      stop("'pkgs' must be a character vector of package names.", call. = FALSE)
+    }
+    result <- matrix(character(), nrow = 0L, ncol = 2L)
+    if (!length(pkgs)) return(result)
+    if (is.null(available)) {
+      if (is.null(contriburl)) {
+        if (is.null(repos)) repos <- getOption("webr_pkg_repos")
+        if (!is.character(repos) || !length(repos) || anyNA(repos) ||
+            any(!nzchar(repos)) || any(repos == "@CRAN@")) {
+          stop("Supply a webR binary repository URL, such as 'https://repo.r-wasm.org'.", call. = FALSE)
+        }
+        version <- paste(R.version$major,
+          strsplit(R.version$minor, ".", fixed = TRUE)[[1L]][1L], sep = ".")
+        contriburl <- paste0(sub("/$", "", repos), "/bin/emscripten/contrib/", version)
+      }
+      if (!is.character(contriburl) || !length(contriburl) || anyNA(contriburl) ||
+          any(!nzchar(contriburl)) || any(contriburl == "@CRAN@")) {
+        stop("'contriburl' must identify a webR binary repository index.", call. = FALSE)
+      }
+      available <- utils::available.packages(contriburl = contriburl, method = method, ...)
+    }
+    if (!is.matrix(available) || !is.character(available) ||
+        !all(c("Package", "Version", "Repository") %in% colnames(available))) {
+      stop("'available' must be a package matrix with Package, Version, and Repository columns.", call. = FALSE)
+    }
+    for (pkg in unique(pkgs)) {
+      rows <- which(available[, "Package"] == pkg)
+      if (!length(rows)) {
+        warning(sprintf("No package '%s' at the webR binary repositories.", pkg),
+          call. = FALSE, immediate. = TRUE)
+        next
+      }
+      versions <- package_version(available[rows, "Version"])
+      row <- rows[which(versions == max(versions))[1L]]
+      filename <- paste0(pkg, "_", available[row, "Version"], ".tgz")
+      if ("File" %in% colnames(available) && !is.na(available[row, "File"]) &&
+          nzchar(available[row, "File"])) {
+        filename <- available[row, "File"]
+      }
+      if (!identical(basename(filename), filename) || filename %in% c(".", "..")) {
+        stop(sprintf("The repository lists an invalid archive filename for '%s'.", pkg), call. = FALSE)
+      }
+      repository <- available[row, "Repository"]
+      if (is.na(repository) || !nzchar(repository)) {
+        stop(sprintf("The repository URL for '%s' is missing.", pkg), call. = FALSE)
+      }
+      destination <- file.path(destdir, filename)
+      url <- paste0(sub("/$", "", repository), "/", filename)
+      status <- tryCatch(
+        utils::download.file(url, destination, method = method, mode = "wb", ...),
+        error = identity
+      )
+      if (!inherits(status, "error") && length(status) == 1L &&
+          !is.na(status) && status == 0L && file.exists(destination)) {
+        result <- rbind(result, c(pkg, destination))
+      } else {
+        detail <- if (inherits(status, "error")) conditionMessage(status) else "transfer did not complete"
+        warning(sprintf("Download of webR package '%s' failed: %s", pkg, detail),
+          call. = FALSE, immediate. = TRUE)
+      }
+    }
+    result
+  }
+  environment(download_packages) <- baseenv()
+  set_package_binding <- function(target, name, value) {
+    was_locked <- bindingIsLocked(name, target)
+    if (was_locked) {
+      unlockBinding(name, target)
+      on.exit(lockBinding(name, target), add = TRUE)
+    }
+    assign(name, value, envir = target)
+  }
+  set_package_binding(asNamespace("utils"), "install.packages", install_packages)
+  set_package_binding(asNamespace("utils"), "download.packages", download_packages)
+  if ("package:utils" %in% search()) {
+    set_package_binding(as.environment("package:utils"), "install.packages", install_packages)
+    set_package_binding(as.environment("package:utils"), "download.packages", download_packages)
+  }
   e$plot_serial <- 0L
   e$view_serial <- 0L
   e$views <- new.env(parent = emptyenv())
@@ -559,10 +821,15 @@ local({
     for (const message of messages) {
       const type = String(message?.type || '');
       if (type === 'prompt') {
-        const primaryPrompt = String(message.data || '').trimStart().startsWith('>');
-        if (primaryPrompt && started) {
-          prompt = true;
-          if (done || flushed) phase = 'finalizing';
+        if (started) {
+          if (done) {
+            prompt = true;
+            phase = 'finalizing';
+          } else {
+            // readline(), menu(), and browser() request stdin before DONE.
+            // Their prompt can be any text, including an ordinary-looking >.
+            phase = this.interruptSupported ? 'waiting-input' : 'evaluating';
+          }
         }
         continue;
       }
@@ -588,11 +855,33 @@ local({
   handleOutputMessage(message = {}) {
     const type = String(message.type || '');
     if (type === 'prompt') {
-      this.replAtPrompt = String(message.data || '').trimStart().startsWith('>');
+      const operation = this.replOperation;
+      if (operation?.started && !operation.done && !operation.settled) {
+        this.replAtPrompt = false;
+        // webR's PostMessage channel cannot service nested stdin. It reports
+        // a native failure after emitting the prompt; keep draining that diagnostic and
+        // completion instead of offering a response it cannot consume.
+        if (this.interruptSupported && !operation.interruptRequested) {
+          this.pendingConsoleInput = {
+            id: ++this.consoleInputSequence,
+            token: operation.token,
+            prompt: stripTerminalControlSequences(String(message.data ?? ''))
+          };
+          this.setExecutionPhase('waiting-input', operation.operationName);
+          this.emit('console-input', { request: this.pendingConsoleInput });
+        } else if (!this.interruptSupported) {
+          operation.unsupportedInputPrompt = true;
+        }
+        return;
+      }
+      // Completion is identified by our DONE marker, not by a configurable
+      // R prompt string. An idle prompt queued before START is still ignored
+      // for operation completion.
+      this.replAtPrompt = Boolean(operation?.started && operation.done)
+        || String(message.data || '').trimStart().startsWith('>');
       if (this.replAtPrompt) {
         for (const waiter of [...this.promptWaiters]) waiter.resolve();
         this.promptWaiters.clear();
-        const operation = this.replOperation;
         if (operation) {
           if (operation.started) operation.prompt = true;
           if (operation.started) this.setExecutionPhase('finalizing', operation.operationName);
@@ -614,6 +903,19 @@ local({
     if (!operation || (type !== 'stdout' && type !== 'stderr')) return;
     this.replAtPrompt = false;
     let raw = stripTerminalControlSequences(String(message.data ?? ''));
+    if (type === 'stderr' && operation.unsupportedInputPrompt && !this.interruptSupported
+      && /^(?:Error:\s*)?Can't block for input when using the PostMessage communication channel\.\s*$/.test(raw.trim())) {
+      // In webR 0.6 this native stdin failure writes stderr and may return an
+      // empty value without raising an R condition. Classify this exact known
+      // failure after a real prompt, while leaving ordinary stderr as output.
+      operation.inputUnsupported = true;
+      this.enqueueReplOutput(operation, {
+        type: 'error',
+        text: 'This R session cannot accept interactive input (PostMessage fallback). Reload after cross-origin isolation becomes active, or use the included local server. R may have continued without a response.'
+      });
+      this.maybeFinishReplOperation(operation);
+      return;
+    }
     const flushMarker = `<<WEBRSTUDIO:FLUSH>>${operation.token}`;
     if (raw.includes(flushMarker)) {
       operation.flushed = true;
@@ -629,6 +931,7 @@ local({
       }
       else {
         operation.done = true;
+        this.clearConsoleInput(operation);
         this.setExecutionPhase('finalizing', operation.operationName);
       }
       this.maybeFinishReplOperation(operation);
@@ -646,6 +949,42 @@ local({
       this.enqueueReplOutput(operation, item);
     }
     this.maybeFinishReplOperation(operation);
+  }
+
+  clearConsoleInput(operation = null) {
+    if (!this.pendingConsoleInput) return;
+    if (operation && this.pendingConsoleInput.token !== operation.token) return;
+    this.pendingConsoleInput = null;
+    this.emit('console-input', { request: null });
+  }
+
+  submitConsoleInput(text, requestId) {
+    this.assertReady();
+    const request = this.pendingConsoleInput;
+    const operation = this.replOperation;
+    if (!this.interruptSupported || !request || request.id !== requestId || !operation || operation.settled
+      || operation.done || operation.interruptRequested || request.token !== operation.token) {
+      throw new Error('R is no longer waiting for this response.');
+    }
+    const input = String(text ?? '');
+    if (/[\r\n\u2028\u2029]/.test(input)) {
+      throw new Error('Enter a single line in response to the R prompt.');
+    }
+    // Consume exactly one request before writing. A double click or a stale
+    // response must never become a new R command after the prompt finishes.
+    this.clearConsoleInput(operation);
+    this.setExecutionPhase('evaluating', operation.operationName);
+    try {
+      this.webR.writeConsole(input);
+    } catch (error) {
+      if (this.replOperation === operation && !operation.done && !operation.settled) {
+        this.pendingConsoleInput = request;
+        this.setExecutionPhase('waiting-input', operation.operationName);
+        this.emit('console-input', { request });
+      }
+      throw error;
+    }
+    return true;
   }
 
   enqueueReplOutput(operation, item = {}) {
@@ -749,6 +1088,7 @@ local({
         if (settled) return;
         settled = true;
         operation.settled = true;
+        this.clearConsoleInput(operation);
         globalThis.clearTimeout(timeout);
         if (error) {
           cancelOutputFrame(operation.outputFrame);
@@ -761,6 +1101,7 @@ local({
           started: operation.started,
           done: operation.done,
           prompt: operation.prompt,
+          inputUnsupported: operation.inputUnsupported,
           interruptRequested: operation.interruptRequested,
           interruptObserved: operation.interruptObserved
         };
@@ -774,6 +1115,8 @@ local({
         done: false,
         flushed: false,
         prompt: false,
+        unsupportedInputPrompt: false,
+        inputUnsupported: false,
         interruptRequested: false,
         interruptObserved: false,
         interruptRequestedAt: 0,
@@ -800,6 +1143,7 @@ local({
   abortReplOperation(error = new Error('The interactive R operation was cancelled.')) {
     this.replOperation?.finish(error);
     this.replOperation = null;
+    this.clearConsoleInput();
   }
 
   stopOutputPump(error = new Error('The webR output stream was stopped.')) {
@@ -813,28 +1157,45 @@ local({
   }
 
   async ensureDirectory(path) {
-    const normalized = path.startsWith('/') ? path : `/${path}`;
+    const normalized = explicitVirtualPath(path.startsWith('/') ? path : `/${path}`);
+    if (this.ready) return this.inspectVirtualFiles('mkdir', normalized);
     const segments = normalized.split('/').filter(Boolean);
     let current = '';
     for (const segment of segments) {
       current += `/${segment}`;
-      try { await this.webR.FS.mkdir(current); } catch { /* Existing directories are expected. */ }
+      const present = await this.webR.FS.analyzePath(current);
+      if (present.exists) {
+        if (!present.object?.isFolder) throw new Error(`Not a directory: ${current}`);
+      } else await this.webR.FS.mkdir(current);
     }
   }
 
   async mirrorFile(path, content) {
-    this.assertReady();
-    const normalized = normalizePath(path);
+    this.assertIdle('Project file synchronization');
+    const runtime = this.webR;
+    const generation = this.generation;
+    const check = () => {
+      if (runtime !== this.webR || generation !== this.generation || !this.ready || this.running) {
+        throw runtimeCancellationError('The R runtime changed during project file synchronization.');
+      }
+    };
+    const normalized = projectRelativePath(path);
     const target = `/project/${normalized}`;
-    await this.ensureDirectory(dirname(target));
+    await this.ensureDirectory(target.slice(0, target.lastIndexOf('/')));
+    check();
+    const present = await this.statVirtualFile(target);
+    check();
+    if (present?.isDirectory) throw new Error(`A directory already exists at ${target}`);
     const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
-    await this.webR.FS.writeFile(target, bytes);
+    await runtime.FS.writeFile(target, bytes);
+    check();
     return target;
   }
 
   async removeMirroredFile(path) {
     if (!this.ready) return;
-    try { await this.webR.FS.unlink(`/project/${normalizePath(path)}`); } catch { /* File may not be mirrored yet. */ }
+    const target = `/project/${projectRelativePath(path)}`;
+    if (await this.statVirtualFile(target)) await this.deleteVirtualFile(target);
   }
 
   async clearMirroredFiles() {
@@ -853,7 +1214,9 @@ local({
 
   async listVirtualFiles(directory = '/project') {
     this.assertIdle('Runtime file browsing');
-    const path = normalizeVirtualPath(directory);
+    const path = String(directory).startsWith('/')
+      ? explicitVirtualPath(directory)
+      : normalizeVirtualPath(directory);
     const records = await this.evalStringArray(`local({
       path <- ${rString(path)}
       if (!dir.exists(path)) stop(sprintf("Directory does not exist: %s", path), call. = FALSE)
@@ -881,7 +1244,7 @@ local({
       path,
       entries: parseDelimitedRecords(records).map(fields => ({
         name: fields[0],
-        path: normalizeVirtualPath(fields[1]),
+        path: explicitVirtualPath(fields[1]),
         isDirectory: fields[2] === 'TRUE',
         size: Number(fields[3]) || 0,
         modifiedAt: (Number(fields[4]) || 0) * 1000
@@ -889,10 +1252,57 @@ local({
     };
   }
 
+  async inspectVirtualFiles(operation, path) {
+    const action = operation === 'delete' ? 'Runtime file deletion' : 'Runtime file browsing';
+    this.assertIdle(action);
+    const target = explicitVirtualPath(path);
+    const runtime = this.webR;
+    const generation = this.generation;
+    // Return filesystem errors as data so webR does not include this generated
+    // JavaScript source in the user-facing R error call.
+    const source = `(() => {
+      try {
+        return JSON.stringify({ ok: true, result: (${runtimeFileOperation.toString()})(${JSON.stringify({ operation, path: target })}) });
+      } catch (error) {
+        return JSON.stringify({ ok: false, error: error?.message || String(error) });
+      }
+    })()`;
+    let result;
+    try {
+      result = await runtime.evalRString(`webr::eval_js(${rString(source)})`);
+    } catch (error) {
+      throw new Error(`${action} failed for ${target}: ${error?.message || String(error)}`, { cause: error });
+    }
+    if (runtime !== this.webR || generation !== this.generation || !this.ready) {
+      throw runtimeCancellationError('The webR runtime changed during the file operation. Refresh the Explorer.');
+    }
+    const response = JSON.parse(result);
+    if (!response.ok) throw new Error(`${action} failed for ${target}: ${response.error || 'Unknown filesystem error'}`);
+    return response.result;
+  }
+
+  async listProjectFiles() {
+    return this.inspectVirtualFiles('list', '/project');
+  }
+
+  async statVirtualFile(path) {
+    return this.inspectVirtualFiles('stat', path);
+  }
+
+  async deleteVirtualFile(path) {
+    return this.inspectVirtualFiles('delete', path);
+  }
+
   async readVirtualFile(path) {
     this.assertIdle('Runtime file download');
-    const target = normalizeVirtualPath(path);
-    return new Uint8Array(await this.webR.FS.readFile(target));
+    const target = explicitVirtualPath(path);
+    const runtime = this.webR;
+    const generation = this.generation;
+    const bytes = await runtime.FS.readFile(target);
+    if (runtime !== this.webR || generation !== this.generation || !this.ready) {
+      throw runtimeCancellationError('The R runtime changed while reading the project file.');
+    }
+    return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   }
 
   async readLastRunState({ attempts = 4 } = {}) {
@@ -957,8 +1367,8 @@ local({
       const runState = await this.readLastRunState();
       const interrupted = runState.interrupted;
       const interruptLate = Boolean(replSummary.interruptRequested && !interrupted && runState.boundaryInterrupt);
-      const ok = interrupted ? false : runState.ok;
-      const [traceback, expression, errorCall] = ok || interrupted ? [[], '', ''] : await Promise.all([
+      const ok = interrupted ? false : runState.ok && !replSummary.inputUnsupported;
+      const [traceback, expression, errorCall] = ok || interrupted || replSummary.inputUnsupported ? [[], '', ''] : await Promise.all([
         this.evalStringArray('if (length(.webrStudio$last_trace)) .webrStudio$last_trace else character()'),
         this.webR.evalRString('.webrStudio$last_expression'),
         this.webR.evalRString('.webrStudio$last_error_call')
@@ -1031,7 +1441,7 @@ local({
 
   async sourceFile(path, { echo = false, onOutput = null } = {}) {
     this.assertReady();
-    const normalized = normalizePath(path);
+    const normalized = projectRelativePath(path);
     if (!normalized || !/\.r$/i.test(normalized)) throw new Error('Open an R script before sourcing.');
     if (this.running) throw new Error('The webR runtime is busy with another expression');
 
@@ -1063,8 +1473,8 @@ local({
       const runState = await this.readLastRunState();
       const interrupted = runState.interrupted;
       const interruptLate = Boolean(replSummary.interruptRequested && !interrupted && runState.boundaryInterrupt);
-      const ok = interrupted ? false : runState.ok;
-      const [traceback, expression, errorCall] = ok || interrupted ? [[], '', ''] : await Promise.all([
+      const ok = interrupted ? false : runState.ok && !replSummary.inputUnsupported;
+      const [traceback, expression, errorCall] = ok || interrupted || replSummary.inputUnsupported ? [[], '', ''] : await Promise.all([
         this.evalStringArray('if (length(.webrStudio$last_trace)) .webrStudio$last_trace else character()'),
         this.webR.evalRString('.webrStudio$last_expression'),
         this.webR.evalRString('.webrStudio$last_error_call')
@@ -1251,7 +1661,7 @@ local({
       result = { ok: false, reason: 'not-running' };
     } else if (!this.interruptSupported) {
       result = { ok: false, reason: 'unsupported' };
-    } else if (this.executionPhase !== 'evaluating' || !operation) {
+    } else if (!['evaluating', 'waiting-input'].includes(this.executionPhase) || !operation) {
       result = { ok: false, reason: this.executionPhase === 'preparing' ? 'preparing' : 'finishing' };
     } else if (!operation.started) {
       result = { ok: false, reason: 'preparing' };
@@ -1262,12 +1672,18 @@ local({
     } else {
       operation.interruptRequested = true;
       operation.interruptRequestedAt = performance.now();
+      const pendingInput = this.pendingConsoleInput;
+      this.clearConsoleInput(operation);
       try {
         this.webR.interrupt();
         result = { ok: true, reason: 'requested' };
       } catch (error) {
         operation.interruptRequested = false;
         operation.interruptRequestedAt = 0;
+        if (pendingInput && this.replOperation === operation && !operation.done && !operation.settled) {
+          this.pendingConsoleInput = pendingInput;
+          this.emit('console-input', { request: pendingInput });
+        }
         result = { ok: false, reason: 'failed', error };
       }
     }
@@ -1410,17 +1826,37 @@ local({
 
   async getPackages() {
     this.assertIdle('Package inspection');
-    const records = await this.evalStringArray(`local({
+    const webR = this.webR;
+    const libraries = await webR.evalRRaw('base::.libPaths()', 'string[]', { captureStreams: false });
+    // webR lazily mounts some bundled package files. A JavaScript download
+    // failure during R's installed.packages() can bypass eval_r's on.exit
+    // cleanup, leaving stdout captured and changing R's warning option. Read
+    // only the package metadata through the filesystem RPC first, where such
+    // failures cannot leave an R evaluator or output capture open. lookupPath
+    // returns directory metadata without reading or cloning file contents.
+    for (const library of libraries) {
+      const directory = await webR.FS.lookupPath(library);
+      const contents = (directory.mounted?.root || directory).contents || {};
+      for (const name of Object.keys(contents).sort()) {
+        if (name.startsWith('.')) continue;
+        const path = `${library.replace(/\/$/, '')}/${name}/Meta/package.rds`;
+        const info = await webR.FS.analyzePath(path);
+        if (info.exists && !info.object?.isFolder) await webR.FS.readFile(path);
+      }
+    }
+    if (webR !== this.webR) throw runtimeCancellationError();
+    this.assertIdle('Package inspection');
+    const records = await webR.evalRRaw(`local({
       sep <- intToUtf8(31)
       enc <- function(x) utils::URLencode(enc2utf8(as.character(x)), reserved = TRUE)
-      installed <- installed.packages()
+      installed <- installed.packages(lib.loc = c(${libraries.map(rString).join(', ')}))
       packages <- sort(rownames(installed))
       loaded <- sub("^package:", "", grep("^package:", search(), value = TRUE))
       vapply(packages, function(package) {
         values <- c(package, installed[package, "Version"], package %in% loaded, installed[package, "Priority"] %in% c("base", "recommended"))
         paste(vapply(values, enc, character(1)), collapse = sep)
       }, character(1))
-    })`);
+    })`, 'string[]', { captureStreams: false });
     return parseDelimitedRecords(records).map(fields => ({
       name: fields[0], version: fields[1], loaded: fields[2] === 'TRUE', bundled: fields[3] === 'TRUE'
     }));
@@ -1671,7 +2107,7 @@ local({
   async loadDelimitedFile(path, delimiter = ',') {
     this.assertIdle('Data import');
     const objectName = '.__webRStudio_data_view__';
-    const target = `/project/${normalizePath(path)}`;
+    const target = explicitVirtualPath(String(path).startsWith('/') ? path : `/project/${normalizePath(path)}`);
     const separator = delimiter === '\t' ? '\t' : ',';
     await this.webR.evalRVoid(`assign(${rString(objectName)}, utils::read.table(${rString(target)}, header = TRUE, sep = ${rString(separator)}, quote = "\\"", comment.char = "", check.names = FALSE, stringsAsFactors = FALSE, fill = TRUE), envir = .GlobalEnv)`);
     return objectName;

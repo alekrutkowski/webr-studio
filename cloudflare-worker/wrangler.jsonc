@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "webr-studio-cors-proxy",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-27",
+  // Optional routing/cancellation features. Basic dashboard setup can omit them.
+  "compatibility_flags": [
+    "global_fetch_strictly_public",
+    "enable_request_signal",
+    "request_signal_passthrough"
+  ],
+  "workers_dev": true,
+  "observability": { "enabled": false },
+  "vars": {
+    // Replace with your app's exact origin, such as https://yourname.github.io.
+    // This empty default deliberately refuses all traffic until configured.
+    "ALLOWED_ORIGINS": ""
+  }
+  // Set PROXY_TOKEN with: npx wrangler secret put PROXY_TOKEN
+  // Never put the proxy password or a Cloudflare account API token in this file.
+}

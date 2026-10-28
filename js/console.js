@@ -1,8 +1,8 @@
 import {
   debounce, escapeHtml, expressionState, formatDuration, mistralErrorUrl,
   safeOpen, copyText, smartIndentR
-} from './utils.js?v=1.2.12';
-import { acceptAceCompletionOrIndent, EditorManager } from './editor.js?v=1.2.12';
+} from './utils.js?v=1.5.4';
+import { acceptAceCompletionOrIndent, EditorManager } from './editor.js?v=1.5.4';
 
 const CONSOLE_KEYWORDS = [
   'if', 'else', 'for', 'while', 'repeat', 'function', 'return', 'next', 'break',
@@ -18,7 +18,9 @@ function iconMarkup(id) {
 function groupedOutputs(outputs) {
   const groups = [];
   for (const item of outputs) {
-    const normalizedType = item.type === 'stderr' ? 'error' : item.type === 'stdout' ? 'output' : item.type;
+    // R also writes ordinary progress to stderr. Actual conditions arrive as
+    // structured error, warning, or message items from the execution helpers.
+    const normalizedType = item.type === 'stderr' || item.type === 'stdout' ? 'output' : item.type;
     const previous = groups.at(-1);
     if (previous?.type === normalizedType) previous.text += `${previous.text ? '\n' : ''}${item.text}`;
     else groups.push({ type: normalizedType, text: item.text });
@@ -39,12 +41,16 @@ function symbolInAce(editor) {
 }
 
 export class ConsoleManager extends EventTarget {
-  constructor({ host, fallback, output, prompt, engine, settings, callbacks = {} }) {
+  constructor({ host, fallback, output, prompt, inputRequest, inputMessage, inputError, runButton, engine, settings, callbacks = {} }) {
     super();
     this.host = host;
     this.fallback = fallback;
     this.output = output;
     this.prompt = prompt;
+    this.inputRequestElement = inputRequest;
+    this.inputMessage = inputMessage;
+    this.inputError = inputError;
+    this.runButton = runButton;
     this.engine = engine;
     this.settings = settings;
     this.callbacks = callbacks;
@@ -57,6 +63,9 @@ export class ConsoleManager extends EventTarget {
     this.transcript = [];
     this.theme = 'crimson_editor';
     this.busy = false;
+    this.runtimeBusy = false;
+    this.inputRequest = null;
+    this.inputDraft = null;
     // Invalidates stale submit-finally handlers when the runtime is restarted.
     this.submissionEpoch = 0;
     // Rendering command syntax highlighting is asynchronous. Keep output
@@ -67,7 +76,7 @@ export class ConsoleManager extends EventTarget {
     this.completionTimer = 0;
     this.completionCallback = null;
     this.completionCache = new Map();
-    this.persistDraft = debounce(() => this.callbacks.onDraftChange?.(this.getValue()), 250);
+    this.persistDraft = debounce(() => this.callbacks.onDraftChange?.(this.getPersistableDraft()), 250);
   }
 
   async initialize({ history = [], transcript = [], draft = '' } = {}) {
@@ -101,7 +110,7 @@ export class ConsoleManager extends EventTarget {
         this.editor.on('change', () => {
           this.updatePrompt();
           this.resizeInput();
-          this.persistDraft();
+          if (!this.inputRequest) this.persistDraft();
         });
         this.editor.on('focus', () => this.callbacks.onFocus?.('console'));
         this.editor.setValue(draft || '', 1);
@@ -118,14 +127,23 @@ export class ConsoleManager extends EventTarget {
 
   enableFallback(draft = '') {
     this.fallbackMode = true;
+    this.editor?.destroy?.();
+    this.editor = null;
     this.host.hidden = true;
     this.fallback.hidden = false;
     this.fallback.value = draft;
     this.fallback.addEventListener('input', () => {
       this.updatePrompt();
-      this.persistDraft();
+      if (!this.inputRequest) this.persistDraft();
     });
     this.fallback.addEventListener('keydown', event => {
+      if (this.inputRequest) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          if (!event.shiftKey) this.submit();
+        }
+        return;
+      }
       if (event.key === 'Enter' && (event.ctrlKey || expressionState(this.fallback.value).complete) && !event.shiftKey) {
         event.preventDefault();
         this.submit();
@@ -147,6 +165,7 @@ export class ConsoleManager extends EventTarget {
       name: 'consoleEnter',
       bindKey: { win: 'Enter', linux: 'Enter' },
       exec: () => {
+        if (this.inputRequest) { this.submit(); return; }
         const value = this.getValue();
         const cursor = this.editor.getCursorPosition();
         const lastRow = this.editor.session.getLength() - 1;
@@ -156,7 +175,7 @@ export class ConsoleManager extends EventTarget {
       }
     });
     this.editor.commands.addCommand({ name: 'consoleForceRun', bindKey: { win: 'Ctrl-Enter', linux: 'Ctrl-Enter' }, exec: () => this.submit() });
-    this.editor.commands.addCommand({ name: 'consoleNewline', bindKey: { win: 'Shift-Enter', linux: 'Shift-Enter' }, exec: editor => editor.insert('\n') });
+    this.editor.commands.addCommand({ name: 'consoleNewline', bindKey: { win: 'Shift-Enter', linux: 'Shift-Enter' }, exec: editor => { if (!this.inputRequest) editor.insert('\n'); } });
     this.editor.commands.addCommand({ name: 'consoleHistoryPrevious', bindKey: { win: 'Up', linux: 'Up' }, exec: editor => {
       const cursor = editor.getCursorPosition();
       if (cursor.row === 0) this.historyPrevious();
@@ -169,12 +188,12 @@ export class ConsoleManager extends EventTarget {
     }});
     this.editor.commands.addCommand({ name: 'consolePipe', bindKey: { win: 'Ctrl-Shift-M', linux: 'Ctrl-Shift-M' }, exec: () => this.insertPipe() });
     this.editor.commands.addCommand({ name: 'consoleClear', bindKey: { win: 'Ctrl-L', linux: 'Ctrl-L' }, exec: () => this.clear() });
-    this.editor.commands.addCommand({ name: 'consoleHelp', bindKey: { win: 'F1', linux: 'F1' }, exec: () => this.callbacks.onHelp?.(symbolInAce(this.editor)) });
-    this.editor.commands.addCommand({ name: 'consoleSmartIndent', bindKey: { win: 'Ctrl-I', linux: 'Ctrl-I' }, exec: () => this.setValue(smartIndentR(this.getValue(), this.settings.tabSize || 2)) });
+    this.editor.commands.addCommand({ name: 'consoleHelp', bindKey: { win: 'F1', linux: 'F1' }, exec: () => { if (!this.inputRequest) this.callbacks.onHelp?.(symbolInAce(this.editor)); } });
+    this.editor.commands.addCommand({ name: 'consoleSmartIndent', bindKey: { win: 'Ctrl-I', linux: 'Ctrl-I' }, exec: () => { if (!this.inputRequest) this.setValue(smartIndentR(this.getValue(), this.settings.tabSize || 2)); } });
     this.editor.commands.addCommand({
       name: 'consoleAcceptCompletionOrIndent',
       bindKey: { win: 'Tab', linux: 'Tab' },
-      exec: editor => acceptAceCompletionOrIndent(editor)
+      exec: editor => this.inputRequest ? editor.insert('\t') : acceptAceCompletionOrIndent(editor)
     });
   }
 
@@ -185,7 +204,7 @@ export class ConsoleManager extends EventTarget {
     const localCompleter = {
       identifierRegexps,
       getCompletions(editor, session, position, prefix, callback) {
-        if (editor !== manager.editor || !manager.settings.autocomplete) return callback(null, []);
+        if (editor !== manager.editor || manager.inputRequest || !manager.settings.autocomplete) return callback(null, []);
         if (!prefix) return callback(null, []);
         const words = new Set(CONSOLE_KEYWORDS);
         for (const command of manager.history.slice(-250)) {
@@ -206,6 +225,7 @@ export class ConsoleManager extends EventTarget {
         const memberContext = /(?:\$|:::{0,1})[A-Za-z0-9._]*$/.test(line);
         if (
           editor !== manager.editor ||
+          manager.inputRequest ||
           !manager.settings.autocomplete ||
           !manager.engine?.ready ||
           manager.engine.running ||
@@ -256,9 +276,12 @@ export class ConsoleManager extends EventTarget {
     if (this.editor) {
       this.editor.setFontSize(settings.fontSize);
       this.editor.setOption('fontFamily', settings.fontFamily);
-      this.editor.setOption('enableBasicAutocompletion', settings.autocomplete);
-      this.editor.setOption('enableLiveAutocompletion', settings.autocomplete);
-      this.editor.setOption('enableSnippets', settings.autocomplete);
+      const complete = Boolean(settings.autocomplete && !this.inputRequest);
+      this.editor.setOption('enableBasicAutocompletion', complete);
+      this.editor.setOption('enableLiveAutocompletion', complete);
+      this.editor.setOption('enableSnippets', complete);
+      this.editor.setOption('behavioursEnabled', !this.inputRequest);
+      this.editor.setOption('wrapBehavioursEnabled', !this.inputRequest);
       this.editor.session.setTabSize(settings.tabSize || 2);
     }
     if (this.fallback) this.fallback.style.tabSize = String(settings.tabSize || 2);
@@ -275,6 +298,7 @@ export class ConsoleManager extends EventTarget {
   }
 
   getValue() { return this.editor ? this.editor.getValue() : this.fallback.value; }
+  getPersistableDraft() { return this.inputDraft ? this.inputDraft.value : this.getValue(); }
   setValue(value) {
     if (this.editor) this.editor.setValue(value || '', 1);
     else this.fallback.value = value || '';
@@ -282,6 +306,7 @@ export class ConsoleManager extends EventTarget {
   }
 
   insertPipe() {
+    if (this.inputRequest) return;
     const pipe = this.settings.pipe || '|>';
     if (this.editor) this.editor.insert(` ${pipe} `);
     else {
@@ -292,6 +317,11 @@ export class ConsoleManager extends EventTarget {
   }
 
   updatePrompt() {
+    if (this.inputRequest) {
+      this.prompt.textContent = '?';
+      this.prompt.classList.remove('continuation');
+      return;
+    }
     const state = expressionState(this.getValue());
     this.prompt.textContent = state.complete ? '>' : '+';
     this.prompt.classList.toggle('continuation', !state.complete);
@@ -306,7 +336,10 @@ export class ConsoleManager extends EventTarget {
   }
 
   async submit() {
-    if (this.busy) return;
+    // A reply belongs to the currently blocked R read, never to a new R
+    // evaluation. Empty replies and text that is not valid R are intentional.
+    if (this.inputRequest) return this.submitConsoleInput();
+    if (this.busy || this.runtimeBusy || this.engine?.running) return;
     const code = this.getValue().replace(/\r\n?|\u2028|\u2029/g, '\n').trimEnd();
     if (!code.trim()) return;
     const submission = ++this.submissionEpoch;
@@ -322,7 +355,7 @@ export class ConsoleManager extends EventTarget {
       // Do not let a stale submission re-lock or unlock a newer submission.
       if (submission !== this.submissionEpoch) return;
       this.busy = false;
-      this.setReadOnly(false);
+      this.setReadOnly(Boolean(this.runtimeBusy));
       this.focus();
     }
   }
@@ -337,6 +370,7 @@ export class ConsoleManager extends EventTarget {
   }
 
   historyPrevious() {
+    if (this.inputRequest) return;
     if (!this.history.length) return;
     if (this.historyIndex === this.history.length) this.historyDraft = this.getValue();
     this.historyIndex = Math.max(0, this.historyIndex - 1);
@@ -345,6 +379,7 @@ export class ConsoleManager extends EventTarget {
   }
 
   historyNext() {
+    if (this.inputRequest) return;
     if (!this.history.length) return;
     this.historyIndex = Math.min(this.history.length, this.historyIndex + 1);
     this.setValue(this.historyIndex === this.history.length ? this.historyDraft : this.history[this.historyIndex]);
@@ -357,13 +392,110 @@ export class ConsoleManager extends EventTarget {
   }
 
   setReadOnly(readOnly) {
-    if (this.editor) this.editor.setReadOnly(readOnly);
-    else this.fallback.disabled = readOnly;
+    const disabled = Boolean(readOnly && !this.inputRequest);
+    if (this.editor) this.editor.setReadOnly(disabled);
+    else this.fallback.disabled = disabled;
+    if (this.runButton) this.runButton.disabled = disabled;
+  }
+
+  setRuntimeBusy(busy) {
+    this.runtimeBusy = Boolean(busy);
+    this.setReadOnly(this.busy || this.runtimeBusy);
+  }
+
+  setConsoleInput(request) {
+    if (request?.id === this.inputRequest?.id && request?.token === this.inputRequest?.token
+      && Boolean(request) === Boolean(this.inputRequest)) return;
+    this.persistDraft.cancel();
+    this.completionRequest += 1;
+    window.clearTimeout(this.completionTimer);
+    this.completionCallback?.(null, []);
+    this.completionCallback = null;
+    this.editor?.completer?.detach?.();
+
+    if (request) {
+      if (!this.inputRequest) {
+        this.inputDraft = {
+          value: this.getValue(),
+          session: this.editor?.session || null,
+          completers: this.editor?.completers,
+          start: this.fallback?.selectionStart,
+          end: this.fallback?.selectionEnd
+        };
+      }
+      this.inputRequest = request;
+      if (this.editor) {
+        // A temporary plain-text session keeps replies out of command undo
+        // history as well as the persisted console draft and R history.
+        const previous = this.editor.session;
+        const session = this.ace.createEditSession('', 'ace/mode/text');
+        session.setUseWorker(false);
+        this.editor.setSession(session);
+        this.editor.completers = [];
+        if (previous !== this.inputDraft.session) previous.destroy();
+      } else this.fallback.value = '';
+      if (this.inputMessage) this.inputMessage.textContent = String(request.prompt || 'R is waiting for a response.');
+    } else {
+      const draft = this.inputDraft;
+      this.inputRequest = null;
+      if (draft) {
+        if (this.editor && draft.session) {
+          const reply = this.editor.session;
+          this.editor.setSession(draft.session);
+          this.editor.completers = draft.completers;
+          reply.destroy();
+        } else {
+          this.fallback.value = draft.value;
+          this.fallback.setSelectionRange(draft.start || 0, draft.end || 0);
+        }
+      }
+      this.inputDraft = null;
+      if (this.inputMessage) this.inputMessage.textContent = '';
+    }
+    if (this.inputError) this.inputError.textContent = '';
+    if (this.inputRequestElement) this.inputRequestElement.hidden = !request;
+    this.host.closest('.console-input-wrap')?.classList.toggle('waiting-input', Boolean(request));
+    if (this.runButton) {
+      const label = request ? 'Send response (Enter)' : 'Run expression (Ctrl+Enter)';
+      this.runButton.title = label;
+      this.runButton.setAttribute('aria-label', label);
+      const text = this.runButton.querySelector('.console-send-label');
+      if (text) text.hidden = !request;
+    }
+    const label = request ? 'Response to the current R prompt' : 'R console input';
+    this.host.setAttribute('aria-label', label);
+    this.fallback.setAttribute('aria-label', label);
+    this.editor?.textInput?.getElement()?.setAttribute('aria-label', label);
+    this.applySettings(this.settings);
+    this.updatePrompt();
+    this.resizeInput();
+    this.setReadOnly(this.busy || this.runtimeBusy);
+    if (request) this.focus();
+  }
+
+  submitConsoleInput() {
+    const request = this.inputRequest;
+    if (!request) return;
+    try {
+      const reply = this.getValue();
+      if (/[\r\n\u2028\u2029]/.test(reply)) throw new Error('Enter a single line. The response has not been sent.');
+      this.engine.submitConsoleInput(reply, request.id);
+    } catch (error) {
+      // Do not record the reply or include it in error messages: readline()
+      // can ask for values that should not become saved IDE history.
+      if (this.engine.pendingConsoleInput?.id !== request.id) this.setConsoleInput(this.engine.pendingConsoleInput);
+      const message = error.message || 'The response could not be sent. Try again or use Stop.';
+      if (this.inputRequest && this.inputError) this.inputError.textContent = message;
+      else this.callbacks.onNotify?.(message);
+      this.focus();
+    }
   }
 
   resetExecutionState({ focus = false } = {}) {
     this.submissionEpoch += 1;
     this.busy = false;
+    this.runtimeBusy = false;
+    if (this.inputRequest) this.setConsoleInput(null);
     this.setReadOnly(false);
     if (focus) this.focus();
   }
@@ -392,7 +524,7 @@ export class ConsoleManager extends EventTarget {
   async appendStreamItem(session, item = {}) {
     if (!session || session.closed) return null;
     const rawType = String(item.type || 'stdout');
-    const type = rawType === 'stdout' ? 'output' : rawType === 'stderr' ? 'error' : rawType;
+    const type = rawType === 'stdout' || rawType === 'stderr' ? 'output' : rawType;
     let text = String(item.text ?? '');
     const coalescible = rawType === 'stdout' || rawType === 'stderr';
     const forceNew = !coalescible || type === 'command';

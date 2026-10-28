@@ -1,13 +1,26 @@
 {
   "name": "webr-studio",
-  "version": "1.2.12",
+  "version": "1.5.4",
   "private": true,
   "description": "A fast, browser-native R IDE powered by webR.",
   "license": "MIT",
   "author": "Alek Rutkowski <alek.rutkowski@gmail.com>",
   "scripts": {
     "serve": "python3 serve.py",
-    "test": "node tests/static-check.mjs && node tests/unit-check.mjs"
+    "build:network": "node scripts/build-tailscale.mjs",
+    "test:network-runtime": "node scripts/test-network-runtime.mjs",
+    "test": "node tests/static-check.mjs && node tests/unit-check.mjs && node tests/file-content-check.mjs && node tests/engine-files-check.mjs && node tests/network-check.mjs && node tests/network-bridge-check.mjs && node tests/cloudflare-worker-check.mjs && node tests/cloudflare-proxy-check.mjs && node tests/ace-loader-check.mjs",
+    "test:browser": "node tests/browser-network-check.mjs",
+    "test:browser-dns": "node tests/browser-dns-recovery-check.mjs",
+    "test:browser-diagnostics": "node tests/browser-network-diagnostic-check.mjs",
+    "test:browser-console": "node tests/browser-console-network-check.mjs",
+    "test:browser-files": "node tests/browser-files-check.mjs",
+    "test:browser-cloudflare": "node tests/browser-cloudflare-check.mjs",
+    "test:browser-packages": "node tests/browser-package-inspection-check.mjs",
+    "test:browser-install": "node tests/browser-package-install-check.mjs",
+    "test:browser-input": "node tests/browser-console-input-check.mjs",
+    "test:browser-open": "node tests/browser-file-open-check.mjs",
+    "test:browser-persistence": "node tests/browser-project-persistence-check.mjs"
   },
   "type": "module"
 }

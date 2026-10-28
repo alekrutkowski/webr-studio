@@ -1,0 +1,163 @@
+{
+  "upstream": "https://github.com/adrianosela/tailscale-web",
+  "upstreamVersion": "0.1.16",
+  "upstreamCommit": "004de98821ba5856332df750f431f4fcb7ca76f6",
+  "goToolchain": "go1.26.10",
+  "goToolchainDownloads": "https://go.dev/dl/",
+  "officialTailscaleVersion": "v1.96.0",
+  "sourceChanges": [
+    "Removed the local Tailscale module replacement; use the official checksum-verified module.",
+    "Removed the experimental WebRTC signaling environment setting and its unused envknob import.",
+    "Use the Go runtime shim from the build toolchain instead of the npm-inlined shim.",
+    "Normalize comment and diagnostic typography to the project style.",
+    "Use content-hash URL queries for the Go shim and WebAssembly asset.",
+    "Increase the HTTP client timeout from 30 to 120 seconds for data downloads over relayed connections.",
+    "Require Tailscale Running state, an assigned IP, and a node key before reporting connection readiness.",
+    "Add opt-in Cloudflare DNS-over-HTTPS through the selected exit node for public downloads, preserving private-name routing and the default exit-node DNS mode.",
+    "Add explicit staged diagnostics for the selected exit, configured WireGuard route, encrypted peer, PeerAPI, and DNS-free TCP/TLS/HTTP to 1.1.1.1 using the same userspace connection.",
+    "Expose exit-node operating system and device-key expiry, and reject selecting expired exits."
+  ],
+  "buildFlags": [
+    "-mod=readonly",
+    "-trimpath",
+    "-buildvcs=false",
+    "-ldflags=-s -w -buildid="
+  ],
+  "modules": [
+    {
+      "path": "filippo.io/edwards25519",
+      "version": "v1.2.0"
+    },
+    {
+      "path": "github.com/akutz/memconn",
+      "version": "v0.1.0"
+    },
+    {
+      "path": "github.com/breml/rootcerts",
+      "version": "v0.3.4"
+    },
+    {
+      "path": "github.com/coder/websocket",
+      "version": "v1.8.12"
+    },
+    {
+      "path": "github.com/creachadair/msync",
+      "version": "v0.7.1"
+    },
+    {
+      "path": "github.com/fxamacker/cbor/v2",
+      "version": "v2.9.0"
+    },
+    {
+      "path": "github.com/gaissmai/bart",
+      "version": "v0.26.1"
+    },
+    {
+      "path": "github.com/go-json-experiment/json",
+      "version": "v0.0.0-20250813024750-ebf49471dced"
+    },
+    {
+      "path": "github.com/golang/groupcache",
+      "version": "v0.0.0-20241129210726-2c02b8208cf8"
+    },
+    {
+      "path": "github.com/google/btree",
+      "version": "v1.1.3"
+    },
+    {
+      "path": "github.com/hdevalence/ed25519consensus",
+      "version": "v0.2.0"
+    },
+    {
+      "path": "github.com/klauspost/compress",
+      "version": "v1.18.5"
+    },
+    {
+      "path": "github.com/pires/go-proxyproto",
+      "version": "v0.8.1"
+    },
+    {
+      "path": "github.com/tailscale/hujson",
+      "version": "v0.0.0-20260302212456-ecc657c15afd"
+    },
+    {
+      "path": "github.com/tailscale/peercred",
+      "version": "v0.0.0-20250107143737-35a0c7bd7edc"
+    },
+    {
+      "path": "github.com/tailscale/web-client-prebuilt",
+      "version": "v0.0.0-20250124233751-d4cd19a26976"
+    },
+    {
+      "path": "github.com/tailscale/wireguard-go",
+      "version": "v0.0.0-20260427181203-e3ac4a0afb4e"
+    },
+    {
+      "path": "github.com/x448/float16",
+      "version": "v0.8.4"
+    },
+    {
+      "path": "go4.org/mem",
+      "version": "v0.0.0-20240501181205-ae6ca9944745"
+    },
+    {
+      "path": "go4.org/netipx",
+      "version": "v0.0.0-20231129151722-fdeea329fbba"
+    },
+    {
+      "path": "golang.org/x/crypto",
+      "version": "v0.50.0"
+    },
+    {
+      "path": "golang.org/x/exp",
+      "version": "v0.0.0-20250620022241-b7579e27df2b"
+    },
+    {
+      "path": "golang.org/x/net",
+      "version": "v0.53.0"
+    },
+    {
+      "path": "golang.org/x/sys",
+      "version": "v0.43.0"
+    },
+    {
+      "path": "golang.org/x/term",
+      "version": "v0.42.0"
+    },
+    {
+      "path": "golang.org/x/text",
+      "version": "v0.36.0"
+    },
+    {
+      "path": "golang.org/x/time",
+      "version": "v0.12.0"
+    },
+    {
+      "path": "gvisor.dev/gvisor",
+      "version": "v0.0.0-20260224225140-573d5e7127a8"
+    },
+    {
+      "path": "tailscale.com",
+      "version": "v1.96.0"
+    }
+  ],
+  "goModSha256": "54e41a97909fb4d5875f6be9fb302d44effe84e3a60e8b4970bee7f2d54e2345",
+  "goSumSha256": "3393a230fd6170bd41d86c63712c724165e81433ade5f0b74a1b3a1c977943a6",
+  "artifacts": {
+    "main.wasm": {
+      "sha256": "10342c226f2bdbcf3c952613004d2d8a8025bc1af621d73337996b88dd4a820b"
+    },
+    "wasm_exec.js": {
+      "sha256": "0c949f4996f9a89698e4b5c586de32249c3b69b7baadb64d220073cc04acba14"
+    },
+    "tailscale-web.es.js": {
+      "sha256": "071c6a68af5f5af6d164bde32dd0bc907e9006953e1fdfb0c09ea57e29d6dda9"
+    },
+    "LICENSE.tailscale-web.txt": {
+      "sha256": "f5b8b5b6c54cf21e0ba3e6ef793d6e288316c76e19d73e24cde2cb0090e5d85e"
+    },
+    "THIRD-PARTY-LICENSES.txt": {
+      "sha256": "a439f157da2810ea8a663199e84ef8061d23424153a60fe187acd440eb0ac272"
+    }
+  }
+}

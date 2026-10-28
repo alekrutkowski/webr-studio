@@ -175,6 +175,27 @@ blankLineBuilder.appendChunk({
 });
 assert.match(blankLineBuilder.build().markdown, /first\n\n\n\nsecond/, 'GFM export must preserve intentional blank lines inside fenced code and output.');
 
+const downloadOutputBuilder = new RMarkdownGfmBuilder({ stem: 'download.Rmd' });
+downloadOutputBuilder.appendChunk({
+  code: 'download.file(url, "data.csv")',
+  options: { echo: false },
+  result: {
+    ok: false,
+    outputs: [
+      { type: 'stderr', text: "trying URL 'https://example.org/data.csv'" },
+      { type: 'message', text: 'A structured R message' },
+      { type: 'warning', text: 'A structured R warning' },
+      { type: 'error', text: 'A structured R error' }
+    ]
+  }
+});
+const downloadOutputMarkdown = downloadOutputBuilder.build().markdown;
+assert.match(downloadOutputMarkdown, /trying URL 'https:\/\/example\.org\/data\.csv'/);
+assert.doesNotMatch(downloadOutputMarkdown, /(?:Error|Message|Warning): trying URL/, 'Raw stderr progress must not acquire an R condition label in GFM.');
+assert.match(downloadOutputMarkdown, /Message: A structured R message/);
+assert.match(downloadOutputMarkdown, /Warning: A structured R warning/);
+assert.match(downloadOutputMarkdown, /Error: A structured R error/);
+
 const gfmBuilder = new RMarkdownGfmBuilder({ stem: 'analysis.Rmd', title: 'Analysis' });
 gfmBuilder.appendMarkdown('Intro with $x^2$.');
 gfmBuilder.appendChunk({
@@ -501,6 +522,65 @@ stalePromptEngine.handleOutputMessage({ type: 'prompt', data: '> ' });
 await stalePromptRun;
 assert.deepEqual(stalePromptItems, [{ type: 'stdout', text: '[1] 1' }]);
 
+const inputEngine = new WebREngine();
+inputEngine.ready = true;
+inputEngine.running = true;
+inputEngine.interruptSupported = true;
+inputEngine.replAtPrompt = true;
+const inputWrites = [];
+inputEngine.webR = { writeConsole(value) { inputWrites.push(value); }, interrupt() {} };
+const inputRun = inputEngine.runReplCommand('prompting-command', { token: 'input-flow' });
+await new Promise(resolve => setImmediate(resolve));
+inputEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:START>>input-flow' });
+inputEngine.preflightOutputMessages([{ type: 'prompt', data: '> ' }]);
+assert.equal(inputEngine.executionPhase, 'waiting-input');
+assert.equal(inputEngine.replOperation.prompt, false, 'An input prompt must not mark an operation complete.');
+inputEngine.handleOutputMessage({ type: 'prompt', data: '> ' });
+const firstInput = inputEngine.pendingConsoleInput;
+assert.equal(firstInput.prompt, '> ', 'A readline prompt can look like the top-level R prompt.');
+assert.equal(inputEngine.replAtPrompt, false);
+assert.throws(() => inputEngine.submitConsoleInput('one\ntwo', firstInput.id), /single line/);
+assert.equal(inputEngine.pendingConsoleInput.id, firstInput.id, 'Rejected multiline input must leave the prompt answerable.');
+assert.equal(inputEngine.submitConsoleInput('', firstInput.id), true, 'An empty readline response is valid.');
+assert.equal(inputEngine.pendingConsoleInput, null);
+assert.equal(inputEngine.executionPhase, 'evaluating');
+assert.throws(() => inputEngine.submitConsoleInput('stale', firstInput.id), /no longer waiting/);
+inputEngine.handleOutputMessage({ type: 'prompt', data: '' });
+const secondInput = inputEngine.pendingConsoleInput;
+assert.notEqual(secondInput.id, firstInput.id);
+assert.throws(() => inputEngine.submitConsoleInput('stale', firstInput.id), /no longer waiting/);
+inputEngine.submitConsoleInput('  literal text  ', secondInput.id);
+assert.deepEqual(inputWrites, ['prompting-command', '', '  literal text  '], 'Replies preserve whitespace and are written once as raw stdin.');
+inputEngine.handleOutputMessage({ type: 'stdout', data: '<<WEBRSTUDIO:FLUSH>>input-flow' });
+inputEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:DONE>>input-flow' });
+inputEngine.handleOutputMessage({ type: 'prompt', data: 'custom R prompt: ' });
+await inputRun;
+assert.equal(inputEngine.pendingConsoleInput, null);
+assert.equal(inputEngine.replAtPrompt, true, 'A configured R prompt must still finish a marked operation.');
+
+const cancelInputRun = inputEngine.runReplCommand('another-prompt', { token: 'cancel-input' });
+const cancelledInput = assert.rejects(cancelInputRun, /fixture restart/);
+await new Promise(resolve => setImmediate(resolve));
+inputEngine.handleOutputMessage({ type: 'stderr', data: '<<WEBRSTUDIO:START>>cancel-input' });
+inputEngine.handleOutputMessage({ type: 'prompt', data: 'Selection: ' });
+const cancelledRequest = inputEngine.pendingConsoleInput;
+inputEngine.abortReplOperation(new Error('fixture restart'));
+await cancelledInput;
+assert.equal(inputEngine.pendingConsoleInput, null);
+assert.throws(() => inputEngine.submitConsoleInput('1', cancelledRequest.id), /no longer waiting/);
+assert.equal(inputWrites.at(-1), 'another-prompt', 'A late reply after cancellation must never become a new R command.');
+
+const unsupportedInputEngine = new WebREngine();
+unsupportedInputEngine.executionPhase = 'evaluating';
+unsupportedInputEngine.replOperation = {
+  token: 'postmessage-input', operationName: 'execute', started: true,
+  done: false, flushed: false, prompt: false, settled: false
+};
+unsupportedInputEngine.preflightOutputMessages([{ type: 'prompt', data: 'Selection: ' }]);
+unsupportedInputEngine.handleOutputMessage({ type: 'prompt', data: 'Selection: ' });
+assert.equal(unsupportedInputEngine.pendingConsoleInput, null, 'A channel without nested stdin support must not offer an unusable response input.');
+assert.equal(unsupportedInputEngine.executionPhase, 'evaluating');
+
 const interruptEngine = new WebREngine();
 let interruptCalls = 0;
 interruptEngine.running = true;
@@ -685,6 +765,30 @@ assert.deepEqual(streamEntries.map(({ type, text }) => ({ type, text })), [
   { type: 'command', text: 'x <- 1' },
   { type: 'output', text: '[1] 1' }
 ]);
+
+const downloadItems = [
+  { type: 'stderr', text: "trying URL 'https://example.org/data.csv'" },
+  { type: 'stdout', text: '[1] 0' },
+  { type: 'message', text: 'Download message' },
+  { type: 'warning', text: 'Download warning' },
+  { type: 'error', text: 'Actual download failure' }
+];
+const expectedDownloadEntries = [
+  { type: 'output', text: "trying URL 'https://example.org/data.csv'\n[1] 0" },
+  { type: 'message', text: 'Download message' },
+  { type: 'warning', text: 'Download warning' },
+  { type: 'error', text: 'Actual download failure' }
+];
+const streamedDownloadStart = streamEntries.length;
+const downloadStream = fakeConsole.beginStream();
+for (const item of downloadItems) await fakeConsole.appendStreamItem(downloadStream, item);
+fakeConsole.endStream(downloadStream);
+assert.deepEqual(streamEntries.slice(streamedDownloadStart).map(({ type, text }) => ({ type, text })), expectedDownloadEntries,
+  'Streamed raw stderr is ordinary output; structured R conditions retain their distinct types.');
+const batchedDownloadStart = streamEntries.length;
+await fakeConsole.appendExecution({ ok: false, outputs: downloadItems }, { showTiming: false, showTraceback: false });
+assert.deepEqual(streamEntries.slice(batchedDownloadStart).map(({ type, text }) => ({ type, text })), expectedDownloadEntries,
+  'Batched output must classify progress and structured R conditions consistently with streaming.');
 const previousAce = globalThis.ace;
 let highlightedTheme = '';
 globalThis.ace = {

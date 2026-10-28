@@ -172,6 +172,42 @@ export function isTextPath(path = '') {
   return ['r', 'rmd', 'md', 'markdown', 'csv', 'tsv', 'txt', 'json', 'yaml', 'yml', 'html', 'htm', 'css', 'js', 'svg'].includes(extname(path));
 }
 
+function fileByteView(content) {
+  if (content instanceof ArrayBuffer) return new Uint8Array(content);
+  if (ArrayBuffer.isView(content)) return new Uint8Array(content.buffer, content.byteOffset, content.byteLength);
+  if (Array.isArray(content)) return Uint8Array.from(content);
+  return null;
+}
+
+export function textEncodingFromBOM(content) {
+  if (typeof content === 'string') return content.startsWith('\uFEFF') ? 'UTF-8' : '';
+  const bytes = fileByteView(content);
+  if (!bytes) return '';
+  if (bytes[0] === 0xff && bytes[1] === 0xfe && bytes[2] === 0 && bytes[3] === 0) return 'UTF-32 LE';
+  if (bytes[0] === 0 && bytes[1] === 0 && bytes[2] === 0xfe && bytes[3] === 0xff) return 'UTF-32 BE';
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'UTF-16 LE';
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'UTF-16 BE';
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'UTF-8';
+  return '';
+}
+
+export function decodeFileText(content) {
+  let text;
+  if (typeof content === 'string') text = content;
+  else {
+    const bytes = fileByteView(content);
+    if (!bytes) return null;
+    try {
+      // Never replace invalid bytes or drop a UTF-8 BOM. Re-encoding accepted
+      // text must reproduce the original bytes used by project backups.
+      text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch { return null; }
+  }
+  // Ordinary text whitespace is allowed. NUL and other binary control bytes
+  // must not become an editor buffer just because a filename ends in .txt.
+  return /[\u0000-\u0008\u000e-\u001f\u007f]/.test(text) ? null : text;
+}
+
 export function isPreviewable(path = '') {
   return ['md', 'markdown', 'rmd'].includes(extname(path));
 }

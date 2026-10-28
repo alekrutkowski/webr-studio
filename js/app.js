@@ -1,28 +1,32 @@
 import {
   APP_VERSION, DEFAULT_SETTINGS, MAX_EDITOR_BYTES, MAX_FILE_BYTES,
   MAX_URL_STATE_CHARS, SAMPLE_FILES, WEBR_VERSION_SUGGESTIONS, normalizeWebRVersion
-} from './config.js?v=1.2.12';
-import { workspaceDB } from './db.js?v=1.2.12';
+} from './config.js?v=1.5.4';
+import { workspaceDB } from './db.js?v=1.5.4';
 import {
-  WebREngine, describeRuntime, environmentTypeLabel, normalizeVirtualPath, stripTerminalControlSequences
-} from './webr-engine.js?v=1.2.12';
-import { EditorManager } from './editor.js?v=1.2.12';
-import { ConsoleManager } from './console.js?v=1.2.12';
-import { DataViewer } from './data-viewer.js?v=1.2.12';
-import { createGist, importGist } from './gist.js?v=1.2.12';
-import { UI } from './ui.js?v=1.2.12';
+  WebREngine, describeRuntime, environmentTypeLabel, explicitVirtualPath, normalizeVirtualPath,
+  projectRelativePath, stripTerminalControlSequences
+} from './webr-engine.js?v=1.5.4';
+import { EditorManager } from './editor.js?v=1.5.4';
+import { ConsoleManager } from './console.js?v=1.5.4';
+import { DataViewer } from './data-viewer.js?v=1.5.4';
+import { createGist, importGist } from './gist.js?v=1.5.4';
+import { UI } from './ui.js?v=1.5.4';
+import { TailscaleNetwork } from './network.js?v=1.5.4';
+import { NetworkBridge } from './network-bridge.js?v=1.5.4';
+import { NetworkUI } from './network-ui.js?v=1.5.4';
 import {
   evaluateInlineRMarkdown, gfmBundleFiles, gfmDocumentStem, RMarkdownGfmBuilder
-} from './rmd-gfm.js?v=1.2.12';
+} from './rmd-gfm.js?v=1.5.4';
 import {
   $, $$, basename, base64UrlToBytes, bytesToBase64Url, clamp, copyText, createZip,
-  debounce, decodeWorkspaceState, dirname, downloadBlob, downloadText,
+  debounce, decodeFileText, decodeWorkspaceState, dirname, downloadBlob, downloadText,
   encodeWorkspaceState, ensureFontLoaded, escapeHtml, extname, extractHelpRequest, formatBytes,
-  formatDate, idle, isDataPath, isPreviewable, isTextPath, localTimestampName,
+  formatDate, idle, isDataPath, isPreviewable, localTimestampName,
   makeUniqueName, mimeFromPath, mistralCodeUrl, normalizePath, rasterizeSvg,
-  readFileAsBytes, readFileAsText, renderMarkdown, renderMathInElement, safeOpen, sanitizeHtml,
-  resolveRMarkdownFigureOptions, sanitizeSvg, splitRMarkdown, uid
-} from './utils.js?v=1.2.12';
+  readFileAsBytes, renderMarkdown, renderMathInElement, safeOpen, sanitizeHtml,
+  resolveRMarkdownFigureOptions, sanitizeSvg, splitRMarkdown, textEncodingFromBOM, uid
+} from './utils.js?v=1.5.4';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -132,14 +136,23 @@ function deepSettings(stored = {}) {
 }
 
 function fileRecord(record) {
-  const content = record.content instanceof ArrayBuffer ? new Uint8Array(record.content) : record.content;
+  const original = typeof record.content === 'string'
+    ? record.content
+    : ArrayBuffer.isView(record.content)
+      ? new Uint8Array(record.content.buffer, record.content.byteOffset, record.content.byteLength)
+      : new Uint8Array(record.content || []);
+  const size = typeof original === 'string' ? textEncoder.encode(original).byteLength : original.byteLength;
+  // Decode only files that fit the editor. Accepted UTF-8 text (including its
+  // BOM) is byte-for-byte reversible; other file contents stay untouched.
+  const text = size <= MAX_EDITOR_BYTES ? decodeFileText(original) : null;
+  const content = text ?? (typeof original === 'string' && size <= MAX_EDITOR_BYTES ? textEncoder.encode(original) : original);
   const binary = typeof content !== 'string';
   return {
-    path: normalizePath(record.path),
-    content: binary ? new Uint8Array(content || []) : String(content || ''),
+    path: projectRelativePath(record.path || 'untitled.R'),
+    content,
     type: binary ? 'binary' : 'text',
     mime: record.mime || mimeFromPath(record.path),
-    size: record.size ?? (binary ? content?.byteLength || 0 : textEncoder.encode(String(content || '')).length),
+    size,
     createdAt: record.createdAt || Date.now(),
     updatedAt: record.updatedAt || Date.now(),
     dirty: false,
@@ -149,17 +162,29 @@ function fileRecord(record) {
 
 function isEditableFile(file) {
   if (!file || Number(file.size || 0) > MAX_EDITOR_BYTES) return false;
-  return file.type === 'text' || isTextPath(file.path || '');
+  return isTextFile(file);
 }
 
 function isTextFile(file) {
-  return Boolean(file) && (file.type === 'text' || isTextPath(file.path || ''));
+  return Boolean(file) && file.type === 'text' && typeof file.content === 'string';
 }
 
 class WebRStudioApp {
   constructor() {
     this.ui = new UI();
-    this.engine = new WebREngine();
+    this.network = new TailscaleNetwork();
+    this.networkBridge = new NetworkBridge({ download: request => this.network.download(request) });
+    this.engine = new WebREngine({ networkBridge: this.networkBridge });
+    this.engine.addEventListener('network', event => {
+      this.network.setBridgeReady(event.detail.ready, event.detail.error?.message || '');
+    });
+    this.network.addEventListener('change', event => {
+      this.networkBridge.required = event.detail.mode !== 'browser';
+    });
+    this.networkUI = new NetworkUI(this.network, {
+      toast: (title, message, type) => this.ui.toast(title, message, type)
+    });
+    window.addEventListener('pagehide', () => this.network.disconnect());
     this.settings = deepSettings();
     this.files = new Map();
     this.openTabs = [];
@@ -197,6 +222,7 @@ class WebRStudioApp {
     this.environmentError = '';
     this.runtimeFilesPath = '/project';
     this.runtimeFiles = [];
+    this.runtimeProjectFiles = new Map();
     this.runtimeFilesError = '';
     this.runtimeFilesLoading = false;
     this.runtimeFilesRefreshPending = true;
@@ -205,6 +231,17 @@ class WebRStudioApp {
     this.pendingMirrorDeletes = new Set();
     this.fileSaveQueues = new Map();
     this.deletingFiles = new Set();
+    this.syncingRuntimeFiles = new Set();
+    this.fileMutationPending = false;
+    this.mirrorOperationQueue = Promise.resolve();
+    this.projectDirectories = new Set();
+    this.runtimeKnownFiles = new Set();
+    this.projectPersistenceReady = false;
+    this.projectPersistencePending = false;
+    this.projectPersistenceError = '';
+    this.projectSnapshotInProgress = false;
+    this.projectPersistenceEpoch = 0;
+    this.projectRuntimeRevision = 0;
     this.erasingLocalData = false;
     this.commandItems = [];
     this.commandSelection = 0;
@@ -216,6 +253,11 @@ class WebRStudioApp {
     this.searchDebounced = debounce(() => this.searchWorkspace(), 180);
     this.gistTokenDebounced = debounce(() => this.persistGistToken(), 300);
     this.autosaveDebounced = debounce(() => this.saveDirtyFiles(), this.settings.autosaveDelay);
+    this.projectBackupDebounced = debounce(() => {
+      if (this.projectPersistenceReady && !this.erasingLocalData) {
+        this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
+      }
+    }, 350);
     this.plotResizeDebounced = debounce(() => {
       this.syncPlotDeviceToViewer({ reflowCurrent: true }).catch(error => console.warn('Could not resize the R plot device:', error));
     }, 180);
@@ -247,16 +289,18 @@ class WebRStudioApp {
   }
 
   async loadPersistentState() {
-    const [storedSettings, records, workspace, snapshots, token] = await Promise.all([
+    const [storedSettings, records, workspace, snapshots, token, directories] = await Promise.all([
       workspaceDB.get('settings', {}),
       workspaceDB.listFiles(),
       workspaceDB.get('workspace', {}),
       workspaceDB.listSnapshots(),
-      workspaceDB.get('gistToken', '')
+      workspaceDB.get('gistToken', ''),
+      workspaceDB.get('projectDirectories', [])
     ]);
     this.settings = deepSettings(storedSettings);
     this.autosaveDebounced = debounce(() => this.saveDirtyFiles(), this.settings.autosaveDelay);
     for (const record of records) this.files.set(record.path, fileRecord(record));
+    this.projectDirectories = new Set((Array.isArray(directories) ? directories : []).map(projectRelativePath));
     this.openTabs = (workspace.openTabs || []).filter(path => this.files.has(path));
     this.activePath = this.files.has(workspace.activePath) ? workspace.activePath : this.openTabs[0] || null;
     this.consoleState = {
@@ -325,6 +369,10 @@ class WebRStudioApp {
       fallback: $('#fallback-console'),
       output: $('#console-output'),
       prompt: $('#console-prompt'),
+      inputRequest: $('#console-input-request'),
+      inputMessage: $('#console-input-message'),
+      inputError: $('#console-input-error'),
+      runButton: $('#console-run-button'),
       engine: this.engine,
       settings: this.settings,
       callbacks: {
@@ -343,6 +391,7 @@ class WebRStudioApp {
         },
         onPlot: plot => this.addPlot(plot),
         onHelp: topic => this.openHelp(topic),
+        onNotify: message => this.ui.toast('R console', message, 'warning'),
         onFocus: focus => { this.currentFocus = focus; },
         getEnvironment: () => this.environment
       }
@@ -367,6 +416,9 @@ class WebRStudioApp {
   }
 
   async initializeRuntime() {
+    this.projectPersistenceReady = false;
+    this.projectPersistenceEpoch += 1;
+    this.fileMutationPending = true;
     this.setRuntimeState('loading', 'Starting R…');
     try {
       await this.engine.initialize({
@@ -377,7 +429,7 @@ class WebRStudioApp {
       });
       this.runtimeAvailable = true;
       this.setBoot(87, 'Mounting project files…');
-      await this.engine.mirrorFiles([...this.files.values()], (done, total, path) => {
+      await this.restoreProjectFiles((done, total, path) => {
         this.setBoot(87 + (done / Math.max(1, total)) * 7, `Mounting ${path}…`);
       });
       if (this.settings.restoreEnvironment) {
@@ -389,6 +441,8 @@ class WebRStudioApp {
           });
         }
       }
+      this.projectPersistenceReady = true;
+      this.fileMutationPending = false;
       await Promise.all([
         this.refreshEnvironment(),
         this.refreshPackages(),
@@ -405,6 +459,7 @@ class WebRStudioApp {
         this.ui.toast('Limited interrupt support', 'Stop cannot interrupt this PostMessage session. Reload once after the isolation service worker activates; the app will not restart R automatically.', 'warning', 9000);
       }
     } catch (error) {
+      this.fileMutationPending = false;
       this.runtimeAvailable = false;
       this.setRuntimeState('error', 'R unavailable');
       this.showWorkbench();
@@ -501,7 +556,12 @@ class WebRStudioApp {
     on('#share-url-button', 'click', () => this.shareWorkspaceUrl());
     on('#command-palette-button', 'click', () => this.openCommandPalette());
     on('#clear-console-button', 'click', () => this.console.clear());
-    on('#console-run-button', 'click', () => this.console.submit());
+    on('#console-run-button', 'click', event => {
+      // A second click on Send must not run the restored command draft if R
+      // consumes its response and finishes between the two click events.
+      if (event.detail > 1) return;
+      this.console.submit();
+    });
     on('#preview-active-button', 'click', () => this.previewActiveFile());
     on('#refresh-preview-button', 'click', () => this.previewActiveFile());
     on('#open-preview-window', 'click', () => this.openPreviewWindow());
@@ -551,10 +611,11 @@ class WebRStudioApp {
     on('#runtime-files-up', 'click', () => this.refreshRuntimeFiles(this.runtimeFilesParent(this.runtimeFilesPath)));
     on('#runtime-files-home', 'click', () => this.refreshRuntimeFiles('/project'));
     on('#runtime-files-refresh', 'click', () => this.refreshRuntimeFiles(this.runtimeFilesPath));
+    on('#sidebar-delete-files', 'click', () => this.deleteFiles([...this.selectedFiles]));
     on('#runtime-files-path', 'keydown', event => {
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      this.refreshRuntimeFiles(event.currentTarget.value);
+      this.refreshRuntimeFiles(normalizeVirtualPath(event.currentTarget.value));
     });
 
     on('#gist-token', 'input', this.gistTokenDebounced);
@@ -591,12 +652,17 @@ class WebRStudioApp {
       if (document.visibilityState === 'hidden' && !this.erasingLocalData) {
         this.autosaveDebounced.flush();
         this.persistWorkspaceDebounced.flush();
+        if (this.projectPersistenceReady && !this.engine.running) this.projectBackupDebounced();
       }
     });
-    window.addEventListener('beforeunload', () => {
+    window.addEventListener('beforeunload', event => {
       if (this.erasingLocalData) return;
       this.autosaveDebounced.flush();
       this.persistWorkspaceDebounced.flush();
+      if (this.hasUnsavedProjectChanges()) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
     });
     window.addEventListener('unhandledrejection', event => {
       const error = event.reason;
@@ -605,20 +671,33 @@ class WebRStudioApp {
       event.preventDefault();
     });
 
+    this.engine.addEventListener('console-input', event => {
+      const request = event.detail.request;
+      if (request && this.maximizedPaneId && this.maximizedPaneId !== 'console-pane') this.restoreMaximizedPane();
+      if (request) {
+        $$('.tab[data-console-view]').forEach(item => item.classList.toggle('active', item.dataset.consoleView === 'console'));
+      }
+      this.console?.setConsoleInput(request);
+    });
     this.engine.addEventListener('state', event => {
       const state = event.detail.state;
       if (state === 'running') {
+        this.projectRuntimeRevision += 1;
+        if (this.projectPersistenceReady) this.projectPersistencePending = true;
         const phase = event.detail.phase || '';
         const label = phase === 'preparing'
           ? 'Preparing R…'
           : phase === 'finalizing'
             ? 'R finalizing output…'
-            : 'R running…';
-        this.setRuntimeState('running', label, { canStop: phase === 'evaluating' });
+            : phase === 'waiting-input'
+              ? 'R is waiting for input'
+              : 'R running…';
+        this.setRuntimeState('running', label, { canStop: phase === 'evaluating' || phase === 'waiting-input' });
       }
       else if (state === 'ready') {
         this.setRuntimeState('ready', this.runtimeReadyLabel());
         if (this.pendingPlotReflow) requestAnimationFrame(() => this.plotResizeDebounced());
+        if (this.projectPersistenceReady) this.projectBackupDebounced();
       }
       else if (state === 'restarting') this.setRuntimeState('loading', 'Restarting R…');
     });
@@ -675,7 +754,7 @@ class WebRStudioApp {
         { label: 'Command palette', icon: 'i-command', shortcut: 'Ctrl Shift P', action: () => this.openCommandPalette() },
         { label: 'Explorer', icon: 'i-file', action: () => this.activateSidebar('explorer') },
         { label: 'Environment', icon: 'i-box', action: () => this.activatePanel('environment') },
-        { label: 'Runtime files', icon: 'i-folder', action: () => this.activatePanel('files') },
+        { label: 'Project files', icon: 'i-folder', action: () => this.activateSidebar('explorer') },
         { label: 'Packages', icon: 'i-box', action: () => this.activatePanel('packages') },
         { label: 'Plots', icon: 'i-chart', action: () => this.activatePanel('plots') },
         { label: 'Help', icon: 'i-help', action: () => this.activatePanel('help') },
@@ -764,13 +843,16 @@ class WebRStudioApp {
   }
 
   async createFile(suggestedName = '', initialContent = '') {
-    const existing = new Set(this.files.keys());
+    const existing = new Set([...this.files.keys(), ...this.runtimeProjectFiles.keys()]);
     let name = suggestedName || makeUniqueName('untitled.R', existing);
     if (suggestedName) name = makeUniqueName(suggestedName, existing);
     const file = fileRecord({ path: name, content: initialContent, type: 'text', mime: mimeFromPath(name) });
     this.files.set(file.path, file);
+    this.pendingMirrors.add(file.path);
+    this.projectPersistencePending = true;
     this.editor.addOrUpdateFile(file);
     await workspaceDB.putFile(file);
+    await this.mirrorFilesWhenIdle([file]);
     this.openFile(file.path);
     this.renderFileTree();
     this.ui.toast('New file', `${file.path} was created.`, 'success');
@@ -782,13 +864,15 @@ class WebRStudioApp {
   }
 
   async loadSampleProject() {
-    const existing = new Set(this.files.keys());
+    const existing = new Set([...this.files.keys(), ...this.runtimeProjectFiles.keys()]);
     const created = [];
     for (const sample of SAMPLE_FILES) {
       const path = makeUniqueName(sample.path, existing);
       existing.add(path);
       const file = fileRecord({ ...sample, path });
       this.files.set(path, file);
+      this.pendingMirrors.add(path);
+      this.projectPersistencePending = true;
       this.editor.addOrUpdateFile(file);
       created.push(file);
     }
@@ -799,19 +883,28 @@ class WebRStudioApp {
     await this.mirrorFilesWhenIdle(created);
   }
 
+  showFileOpenLimit(file) {
+    const path = file.path;
+    const size = Number(file.size || 0);
+    if (size > MAX_EDITOR_BYTES) {
+      const alternative = isDataPath(path) ? 'Download or Open in data viewer' : 'Download';
+      this.ui.toast('File too large for the editor', `${path} is ${formatBytes(size)}. The editor supports files up to ${formatBytes(MAX_EDITOR_BYTES)}. Use ${alternative} from the file menu.`, 'info', 8000);
+      return;
+    }
+    const encoding = textEncodingFromBOM(file.content);
+    if (encoding && encoding !== 'UTF-8') {
+      this.ui.toast('Text encoding not supported', `${path} uses ${encoding}. The editor supports UTF-8 text. Use Download from the file menu to save the original bytes, or convert a copy to UTF-8 before uploading it.`, 'info', 8000);
+      return;
+    }
+    this.ui.toast('Cannot open as text', `${path} is binary or is not valid UTF-8 text. Use Download from the file menu to save the original bytes.`, 'info', 8000);
+  }
+
   openFile(path, position = {}, persist = true) {
-    const normalized = normalizePath(path);
+    const normalized = this.files.has(path) ? path : normalizePath(path);
     const file = this.files.get(normalized);
     if (!file) return;
     if (!isEditableFile(file)) {
-      if (isDataPath(normalized)) {
-        this.openDataFile(normalized);
-        return;
-      }
-      const reason = isTextFile(file) && Number(file.size || 0) > MAX_EDITOR_BYTES
-        ? `${normalized} is ${formatBytes(file.size)}. Files larger than ${formatBytes(MAX_EDITOR_BYTES)} open outside Ace to keep editing responsive.`
-        : `${normalized} can be downloaded or mirrored into R, but it cannot be edited as text.`;
-      this.ui.toast(isTextFile(file) ? 'File too large for the editor' : 'Binary file', reason, 'info', 8000);
+      this.showFileOpenLimit(file);
       return;
     }
     if (!this.openTabs.includes(normalized)) this.openTabs.push(normalized);
@@ -852,7 +945,7 @@ class WebRStudioApp {
 
   onEditorChange(path, content) {
     const file = this.files.get(path);
-    if (!file || this.erasingLocalData || this.deletingFiles.has(path)) return;
+    if (!file || this.erasingLocalData || this.deletingFiles.has(path) || this.syncingRuntimeFiles.has(path)) return;
     file.content = content;
     file.updatedAt = Date.now();
     file.revision = (Number(file.revision) || 0) + 1;
@@ -906,6 +999,8 @@ class WebRStudioApp {
       return await task;
     } finally {
       if (this.fileSaveQueues.get(path) === task) this.fileSaveQueues.delete(path);
+      this.updateProjectSaveStatus();
+      if (this.projectPersistenceReady && !this.erasingLocalData) this.projectBackupDebounced();
     }
   }
 
@@ -936,7 +1031,12 @@ class WebRStudioApp {
       let mirrorError = null;
       if (this.engine.ready && !this.engine.running) {
         try {
-          await this.engine.mirrorFile(path, content);
+          await this.queueMirrorOperation(async () => {
+            if (!this.deletingFiles.has(path)) {
+              await this.engine.mirrorFile(path, content);
+              this.runtimeKnownFiles.add(path);
+            }
+          });
           this.pendingMirrors.delete(path);
           this.runtimeFilesRefreshPending = true;
         } catch (error) {
@@ -959,9 +1059,7 @@ class WebRStudioApp {
         this.autosaveDebounced();
       }
 
-      $('#save-status').textContent = [...this.files.values()].some(item => item.dirty)
-        ? 'Saving changes…'
-        : 'All changes saved';
+      this.updateProjectSaveStatus();
       this.persistWorkspaceDebounced();
       if (mirrorError) {
         this.ui.toast('Saved locally', `The R file mirror will retry later: ${mirrorError.message || String(mirrorError)}`, 'warning', 7000);
@@ -976,10 +1074,191 @@ class WebRStudioApp {
   async saveDirtyFiles() {
     const dirty = [...this.files.values()].filter(file => file.dirty);
     for (const file of dirty) await this.saveFile(file.path);
-    if (![...this.files.values()].some(file => file.dirty)) $('#save-status').textContent = 'All changes saved';
+    this.updateProjectSaveStatus();
+  }
+
+  hasUnsavedProjectChanges() {
+    return Boolean(this.engine.running || this.fileMutationPending || this.projectSnapshotInProgress || this.projectPersistencePending ||
+      this.projectPersistenceError || this.pendingMirrors.size || this.pendingMirrorDeletes.size ||
+      this.fileSaveQueues.size || [...this.files.values()].some(file => file.dirty));
+  }
+
+  updateProjectSaveStatus() {
+    const status = $('#save-status');
+    if (!status) return;
+    if (this.projectPersistenceError) status.textContent = 'Project backup failed';
+    else if (this.projectSnapshotInProgress) status.textContent = 'Saving project files…';
+    else if (this.hasUnsavedProjectChanges()) status.textContent = 'Changes waiting to be saved';
+    else status.textContent = 'All changes saved';
+  }
+
+  async flushProjectBackup() {
+    this.projectBackupDebounced.cancel();
+    if (this.engine.running) throw new Error('Wait for R to finish before saving the complete project.');
+    await this.saveDirtyFiles();
+    await Promise.allSettled([...this.fileSaveQueues.values()]);
+    const canSnapshot = this.projectPersistenceReady && this.engine.ready;
+    if (canSnapshot) {
+      await this.flushPendingMirrors();
+      await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
+    }
+    if ((canSnapshot && this.hasUnsavedProjectChanges()) || this.fileSaveQueues.size ||
+        [...this.files.values()].some(file => file.dirty)) {
+      throw new Error(this.projectPersistenceError || 'The project still has unsaved changes. Wait for saving to finish and try again.');
+    }
+  }
+
+  async restoreProjectFiles(onProgress = () => {}) {
+    await this.queueMirrorOperation(async () => {
+      const records = [...this.files.values()];
+      await this.engine.mirrorFiles(records, onProgress);
+      for (const path of this.projectDirectories) await this.engine.ensureDirectory(`/project/${projectRelativePath(path)}`);
+      this.runtimeKnownFiles = new Set(records.map(file => file.path));
+      for (const file of records) this.pendingMirrors.delete(file.path);
+      this.pendingMirrorDeletes.clear();
+      await this.performPendingMirrors();
+    });
+  }
+
+  async persistRuntimeProject(project, context) {
+    const currentRuntime = () => this.projectPersistenceReady && !this.erasingLocalData &&
+      context.epoch === this.projectPersistenceEpoch && context.runtime === this.engine.webR &&
+      context.generation === this.engine.generation && context.revision === this.projectRuntimeRevision &&
+      this.engine.ready && !this.engine.running;
+    const changedError = () => Object.assign(new Error('The project changed during its backup; saving will retry when R is idle.'), {
+      name: 'ProjectSnapshotChanged'
+    });
+    const assertCurrent = () => { if (!currentRuntime()) throw changedError(); };
+    const protectedFile = (path, file) => Boolean(file?.dirty || this.pendingMirrors.has(path) ||
+      this.pendingMirrorDeletes.has(path) || this.deletingFiles.has(path) || this.fileSaveQueues.has(path));
+    const unchanged = item => this.files.get(item.path) === item.original &&
+      (Number(item.original?.revision) || 0) === item.revision && !protectedFile(item.path, item.original);
+    const equalBytes = (content, bytes) => {
+      const previous = typeof content === 'string' ? textEncoder.encode(content) : content;
+      if (!previous || previous.byteLength !== bytes.byteLength) return false;
+      for (let index = 0; index < bytes.byteLength; index += 1) {
+        if (previous[index] !== bytes[index]) return false;
+      }
+      return true;
+    };
+    const staged = [];
+    const removed = [];
+    const present = new Set();
+    const directories = [];
+    let deferred = false;
+    assertCurrent();
+    for (const entry of project.entries) {
+      if (!entry.path.startsWith('/project/')) throw new Error('The project listing contains a path outside /project.');
+      const path = projectRelativePath(entry.path.slice('/project/'.length));
+      if (entry.isDirectory) { directories.push(path); continue; }
+      present.add(path);
+      const original = this.files.get(path);
+      if (protectedFile(path, original)) { deferred = true; continue; }
+      const candidate = { path, original, revision: Number(original?.revision) || 0 };
+      // Read all regular files, including unchanged-size/timestamp files. No
+      // size cutoff silently excludes a user's data from the project backup.
+      const bytes = await this.engine.readVirtualFile(entry.path);
+      assertCurrent();
+      if (!unchanged(candidate)) { deferred = true; continue; }
+      if (!original || !equalBytes(original.content, bytes)) {
+        candidate.record = fileRecord({ path, content: bytes, createdAt: original?.createdAt,
+          updatedAt: entry.modifiedAt || Date.now(), revision: candidate.revision });
+        staged.push(candidate);
+      }
+    }
+    for (const path of this.runtimeKnownFiles) {
+      if (present.has(path)) continue;
+      const original = this.files.get(path);
+      if (!original) continue;
+      if (protectedFile(path, original)) { deferred = true; continue; }
+      removed.push({ path, original, revision: Number(original.revision) || 0 });
+    }
+    assertCurrent();
+    const changes = staged.filter(item => {
+      if (unchanged(item)) return true;
+      deferred = true;
+      return false;
+    });
+    const deletions = removed.filter(item => {
+      if (unchanged(item)) return true;
+      deferred = true;
+      return false;
+    });
+    const records = changes.map(({ record }) => {
+      const stored = { ...record };
+      delete stored.dirty;
+      delete stored.revision;
+      return stored;
+    });
+    await workspaceDB.commitProjectSnapshot({ files: records,
+      deletedPaths: deletions.map(item => item.path), directories }, () => {
+      assertCurrent();
+      if (![...changes, ...deletions].every(unchanged)) throw changedError();
+      return true;
+    });
+    assertCurrent();
+    for (const item of changes) {
+      if (!unchanged(item)) { deferred = true; continue; }
+      const file = item.original || item.record;
+      if (item.original) Object.assign(file, item.record);
+      this.files.set(item.path, file);
+      this.syncingRuntimeFiles.add(item.path);
+      try {
+        if (isEditableFile(file)) {
+          this.editor?.addOrUpdateFile(file, { syncContent: true });
+          if (this.editor?.fallbackMode && this.activePath === item.path) this.editor.open(item.path);
+        } else {
+          this.editor?.removeFile(item.path);
+          this.openTabs = this.openTabs.filter(path => path !== item.path);
+        }
+      } finally { this.syncingRuntimeFiles.delete(item.path); }
+    }
+    for (const item of deletions) {
+      if (!unchanged(item)) { deferred = true; continue; }
+      this.files.delete(item.path);
+      this.runtimeKnownFiles.delete(item.path);
+      this.selectedFiles.delete(item.path);
+      this.editor?.removeFile(item.path);
+      this.openTabs = this.openTabs.filter(path => path !== item.path);
+    }
+    for (const path of present) this.runtimeKnownFiles.add(path);
+    this.projectDirectories = new Set(directories);
+    this.projectPersistenceError = '';
+    this.projectPersistencePending = deferred || Boolean(this.pendingMirrors.size || this.pendingMirrorDeletes.size ||
+      this.fileSaveQueues.size || [...this.files.values()].some(file => file.dirty));
+    if (this.activePath && !isEditableFile(this.files.get(this.activePath))) {
+      this.activePath = this.openTabs.find(path => isEditableFile(this.files.get(path))) || null;
+      if (this.activePath) this.openFile(this.activePath, {}, false);
+      else {
+        this.editor?.deactivate();
+        $('#editor-welcome').hidden = false;
+      }
+    }
+    if (changes.length || deletions.length) {
+      this.renderEditorTabs();
+      this.updateActiveFileUi();
+      this.persistWorkspaceDebounced();
+    }
+    return { changed: changes.length + deletions.length, deferred: this.projectPersistencePending };
   }
 
   async flushPendingMirrors() {
+    return this.queueMirrorOperation(() => this.performPendingMirrors());
+  }
+
+  queueMirrorOperation(action) {
+    const epoch = this.projectPersistenceEpoch;
+    const pending = this.mirrorOperationQueue.catch(() => {}).then(() => {
+      if (epoch !== this.projectPersistenceEpoch || this.erasingLocalData) {
+        throw Object.assign(new Error('The project changed before its file operation could finish.'), { name: 'ProjectSnapshotChanged' });
+      }
+      return action();
+    });
+    this.mirrorOperationQueue = pending.catch(() => {});
+    return pending;
+  }
+
+  async performPendingMirrors() {
     if (!this.engine.ready || this.engine.running) return;
     const failures = [];
     let changed = false;
@@ -987,12 +1266,14 @@ class WebRStudioApp {
       try {
         await this.engine.removeMirroredFile(path);
         this.pendingMirrorDeletes.delete(path);
+        this.runtimeKnownFiles.delete(path);
         changed = true;
       } catch (error) {
         failures.push(`${path}: ${error.message || String(error)}`);
       }
     }
     for (const path of [...this.pendingMirrors]) {
+      if (this.deletingFiles.has(path)) continue;
       const file = this.files.get(path);
       if (!file) {
         this.pendingMirrors.delete(path);
@@ -1001,6 +1282,7 @@ class WebRStudioApp {
       try {
         await this.engine.mirrorFile(path, file.content);
         this.pendingMirrors.delete(path);
+        this.runtimeKnownFiles.add(path);
         changed = true;
       } catch (error) {
         failures.push(`${path}: ${error.message || String(error)}`);
@@ -1020,13 +1302,28 @@ class WebRStudioApp {
 
   async mirrorFilesWhenIdle(files) {
     const records = [...files].filter(Boolean);
-    if (!this.engine.ready || !records.length) return;
+    if (!records.length) return;
+    records.forEach(file => this.pendingMirrors.add(file.path));
+    this.projectPersistencePending = true;
+    if (!this.engine.ready) return;
     if (this.engine.running) {
       records.forEach(file => this.pendingMirrors.add(file.path));
       return;
     }
-    await this.engine.mirrorFiles(records);
-    records.forEach(file => this.pendingMirrors.delete(file.path));
+    await this.queueMirrorOperation(async () => {
+      const available = records.filter(file => !this.deletingFiles.has(file.path));
+      if (this.engine.running) {
+        available.forEach(file => this.pendingMirrors.add(file.path));
+        return;
+      }
+      await this.engine.mirrorFiles(available);
+      available.forEach(file => {
+        this.pendingMirrors.delete(file.path);
+        this.runtimeKnownFiles.add(file.path);
+      });
+      this.runtimeFilesRefreshPending = true;
+    });
+    if (this.projectPersistenceReady) this.projectBackupDebounced();
   }
 
   async removeMirroredFileWhenIdle(path) {
@@ -1036,13 +1333,14 @@ class WebRStudioApp {
       this.pendingMirrorDeletes.add(path);
       return;
     }
-    await this.engine.removeMirroredFile(path);
+    await this.queueMirrorOperation(() => this.engine.removeMirroredFile(path));
     this.pendingMirrorDeletes.delete(path);
+    this.runtimeKnownFiles.delete(path);
   }
 
   async uploadFiles(fileList) {
     if (!fileList?.length) return;
-    const existing = new Set(this.files.keys());
+    const existing = new Set([...this.files.keys(), ...this.runtimeProjectFiles.keys()]);
     const added = [];
     const skipped = [];
     for (const browserFile of fileList) {
@@ -1054,17 +1352,18 @@ class WebRStudioApp {
         const originalPath = browserFile.webkitRelativePath || browserFile.name;
         const path = makeUniqueName(normalizePath(originalPath), existing);
         existing.add(path);
-        const text = isTextPath(path) || browserFile.type.startsWith('text/') || browserFile.type.includes('json');
-        const content = text ? await readFileAsText(browserFile) : await readFileAsBytes(browserFile);
+        const content = await readFileAsBytes(browserFile);
         const record = fileRecord({
           path,
           content,
-          type: text ? 'text' : 'binary',
           mime: browserFile.type || mimeFromPath(path),
           size: browserFile.size,
           updatedAt: browserFile.lastModified || Date.now()
         });
         this.files.set(path, record);
+        this.pendingMirrors.add(path);
+        this.projectPersistencePending = true;
+        this.updateProjectSaveStatus();
         if (isEditableFile(record)) this.editor.addOrUpdateFile(record);
         added.push(record);
       } catch (error) {
@@ -1080,6 +1379,7 @@ class WebRStudioApp {
       if (firstEditable) this.openFile(firstEditable.path);
       else if (firstData) this.openDataFile(firstData.path);
       this.ui.toast('Files uploaded', `${added.length} file${added.length === 1 ? '' : 's'} added to the project.`, 'success');
+      if (this.projectPersistenceReady) this.projectBackupDebounced();
     }
     if (skipped.length) this.ui.toast('Some files were skipped', skipped.slice(0, 3).join('; '), 'warning', 0);
   }
@@ -1087,15 +1387,22 @@ class WebRStudioApp {
   async renameFile(path) {
     const file = this.files.get(path);
     if (!file) return;
+    if (this.engine.running || this.fileMutationPending) {
+      this.ui.toast('Files are busy', 'Wait for the current operation before renaming files.', 'warning');
+      return;
+    }
     const proposed = await this.ui.prompt('Rename file', 'Enter a project-relative path.', { value: path, acceptLabel: 'Rename' });
     if (!proposed) return;
-    const normalized = normalizePath(proposed);
+    const normalized = proposed === path ? path : normalizePath(proposed);
     if (normalized === path) return;
-    if (this.files.has(normalized)) {
+    if (this.files.has(normalized) || this.runtimeProjectFiles.has(normalized)) {
       this.ui.toast('Name already used', `${normalized} already exists.`, 'warning');
       return;
     }
     if (this.fileSaveQueues.has(path)) await this.fileSaveQueues.get(path).catch(() => {});
+    if (this.engine.running || this.fileMutationPending) return;
+    if (this.runtimeProjectFiles.has(path)) await this.refreshStoredFile(path, this.runtimeProjectFiles.get(path));
+    if (this.files.get(path) !== file) return;
     if (file.dirty) {
       await this.saveFile(path);
       if (file.dirty) {
@@ -1124,27 +1431,59 @@ class WebRStudioApp {
   }
 
   async deleteFiles(paths) {
-    const unique = [...new Set(paths)].filter(path => this.files.has(path));
+    const unique = [...new Set(paths)].filter(path => this.explorerFile(path));
     if (!unique.length) return;
+    if (this.engine.running || this.fileMutationPending) {
+      this.ui.toast('Files are busy', 'Wait for the current R or file operation to finish before deleting files.', 'warning');
+      return;
+    }
     const accepted = await this.ui.confirm(
       `Delete ${unique.length === 1 ? basename(unique[0]) : `${unique.length} files`}?`,
-      'The files will be removed from this browser project. Download a ZIP first if you need a backup.',
+      'The selected files will be removed from the R filesystem and any saved project copies. This cannot be undone.',
       { acceptLabel: 'Delete' }
     );
     if (!accepted) return;
-    unique.forEach(path => this.deletingFiles.add(path));
-    const pendingSaves = unique.map(path => this.fileSaveQueues.get(path)).filter(Boolean);
-    for (const path of unique) {
-      this.files.delete(path);
-      this.selectedFiles.delete(path);
-      this.editor.removeFile(path);
-      this.openTabs = this.openTabs.filter(item => item !== path);
+    // R may have started while the confirmation dialog was open.
+    if (this.engine.running || this.fileMutationPending) {
+      this.ui.toast('Deletion postponed', 'R or another file operation started. Wait for it to finish, then delete the files again.', 'warning');
+      return;
     }
-    await Promise.allSettled(pendingSaves);
-    for (const path of unique) {
-      await workspaceDB.deleteFile(path);
-      await this.removeMirroredFileWhenIdle(path);
-      this.deletingFiles.delete(path);
+    this.fileMutationPending = true;
+    unique.forEach(path => this.deletingFiles.add(path));
+    this.renderRuntimeFiles();
+    const failures = [];
+    let removed = 0;
+    try {
+      await Promise.allSettled(unique.map(path => this.fileSaveQueues.get(path)).filter(Boolean));
+      // Let earlier mirror writes finish before removing their destinations.
+      await this.mirrorOperationQueue;
+      for (const path of unique) {
+        const entry = this.explorerFile(path);
+        if (!entry) continue;
+        try {
+          if (this.engine.ready) {
+            const present = await this.engine.statVirtualFile(entry.virtualPath);
+            if (present) await this.engine.deleteVirtualFile(entry.virtualPath);
+          } else if (!this.files.has(path)) {
+            throw new Error('Start R before deleting a file that exists only in the R session.');
+          }
+          if (this.files.has(path)) await workspaceDB.deleteFile(path);
+          this.pendingMirrors.delete(path);
+          this.pendingMirrorDeletes.delete(path);
+          this.runtimeProjectFiles.delete(path);
+          this.runtimeFiles = this.runtimeFiles.filter(item => item.path !== entry.virtualPath);
+          this.files.delete(path);
+          this.selectedFiles.delete(path);
+          this.editor.removeFile(path);
+          this.openTabs = this.openTabs.filter(item => item !== path);
+          removed += 1;
+        } catch (error) {
+          failures.push(`${path}: ${error.message || String(error)}`);
+        }
+      }
+    } finally {
+      unique.forEach(path => this.deletingFiles.delete(path));
+      this.fileMutationPending = false;
     }
     if (!this.files.has(this.activePath)) {
       this.activePath = this.openTabs.at(-1) || [...this.files.values()].find(isEditableFile)?.path || null;
@@ -1156,13 +1495,20 @@ class WebRStudioApp {
     }
     this.renderAll();
     this.persistWorkspaceDebounced();
+    await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
+    if (failures.length) this.ui.toast('Some files could not be deleted', failures.join('\n'), 'error', 0);
+    else if (removed) this.ui.toast('Files deleted', `${removed} file${removed === 1 ? '' : 's'} removed.`, 'success');
   }
 
-  downloadFile(path) {
-    const file = this.files.get(path);
+  async downloadFile(path) {
+    const file = this.explorerFile(path);
     if (!file) return;
-    const blob = new Blob([file.content], { type: file.mime || mimeFromPath(path) });
-    downloadBlob(blob, basename(path));
+    try {
+      const content = await this.explorerFileContent(path);
+      downloadBlob(new Blob([content], { type: mimeFromPath(path) }), file.name || basename(path));
+    } catch (error) {
+      this.ui.toast('Could not download file', error.message || String(error), 'error');
+    }
   }
 
   downloadSelection() {
@@ -1172,35 +1518,188 @@ class WebRStudioApp {
     this.downloadZip(paths, 'webr-studio-selection.zip');
   }
 
-  downloadZip(paths, filename) {
-    const files = paths.map(path => this.files.get(path)).filter(Boolean).map(file => ({ name: file.path, data: file.content }));
-    downloadBlob(createZip(files), filename);
+  async downloadZip(paths, filename) {
+    try {
+      const files = [];
+      for (const path of paths) {
+        if (!this.explorerFile(path)) continue;
+        files.push({ name: path.replace(/^\/+/, ''), data: await this.explorerFileContent(path) });
+      }
+      downloadBlob(createZip(files), filename);
+    } catch (error) {
+      this.ui.toast('Could not export files', error.message || String(error), 'error');
+    }
   }
 
-  downloadWorkspaceZip() {
-    if (!this.files.size) return this.ui.toast('Project is empty', 'There are no files to download.', 'info');
-    this.downloadZip([...this.files.keys()], localTimestampName('webr-studio-project', 'zip'));
+  async downloadWorkspaceZip() {
+    try { await this.flushProjectBackup(); }
+    catch (error) { this.ui.toast('Project export is not ready', error.message, 'error'); return; }
+    const paths = new Set([...this.files.keys(), ...[...this.runtimeProjectFiles].filter(([, entry]) => !entry.isDirectory).map(([path]) => path)]);
+    if (!paths.size) return this.ui.toast('Project is empty', 'There are no files to download.', 'info');
+    return this.downloadZip([...paths], localTimestampName('webr-studio-project', 'zip'));
+  }
+
+  explorerFile(path) {
+    const stored = this.files.get(path);
+    const runtime = this.runtimeProjectFiles.get(path)
+      || this.runtimeFiles.find(entry => entry.path === path);
+    if ((!stored && !runtime) || runtime?.isDirectory) return null;
+    return {
+      ...stored, ...runtime,
+      path,
+      virtualPath: runtime?.path || `/project/${path}`,
+      size: stored?.dirty ? stored.size : runtime?.size ?? stored?.size ?? 0,
+      dirty: Boolean(stored?.dirty),
+      runtimeOnly: !stored,
+      inRuntime: Boolean(runtime),
+      stored
+    };
+  }
+
+  async explorerFileContent(path) {
+    const entry = this.explorerFile(path);
+    if (!entry) throw new Error('The file is no longer available. Refresh the Explorer.');
+    if (entry.stored?.dirty || this.pendingMirrors.has(path)) return entry.stored.content;
+    if (entry.inRuntime) {
+      if (!this.engine.ready || this.engine.running) throw new Error('Wait for R to be ready before reading this file.');
+      return this.engine.readVirtualFile(entry.virtualPath);
+    }
+    if (entry.stored) return entry.stored.content;
+    throw new Error('This file is no longer in the R session.');
+  }
+
+  async keepRuntimeFile(path, { open = false } = {}) {
+    const entry = this.explorerFile(path);
+    if (!entry) return null;
+    if (!this.requireIdleRuntime('Saving a session file')) return null;
+    let locked = false;
+    try {
+      let target = path;
+      if (path.startsWith('/') || normalizePath(path) !== path) {
+        const proposed = await this.ui.prompt('Keep in project', 'Choose a path inside /project for the saved copy. Backslashes are treated as folder separators in saved projects.', { value: normalizePath(path.startsWith('/') ? entry.name : path), acceptLabel: 'Keep file' });
+        if (!proposed) return null;
+        target = normalizePath(proposed);
+        if (target.split('/').includes('..')) throw new Error('Choose a file path inside /project without parent-directory segments.');
+        target = target.split('/').filter(part => part && part !== '.').join('/');
+        if (!target) throw new Error('Choose a filename inside /project.');
+        if (this.files.has(target) || this.runtimeProjectFiles.has(target)) throw new Error(`${target} already exists in /project. Choose a different name.`);
+      }
+      if (!this.requireIdleRuntime('Saving a session file') || this.deletingFiles.has(path)) return null;
+      this.fileMutationPending = true;
+      this.projectPersistencePending = true;
+      locked = true;
+      this.updateProjectSaveStatus();
+      this.renderRuntimeFiles();
+      const bytes = await this.explorerFileContent(path);
+      const file = fileRecord({ path: target, content: bytes, updatedAt: entry.modifiedAt || Date.now() });
+      await workspaceDB.putFile(file);
+      this.files.set(target, file);
+      if (target !== path) this.pendingMirrors.add(target);
+      if (isEditableFile(file)) this.editor.addOrUpdateFile(file);
+      if (target !== path) await this.mirrorFilesWhenIdle([file]);
+      this.renderFileTree();
+      if (open) this.openFile(target);
+      this.ui.toast('File kept in project', `${target} will be available after restarting R or reloading this page.`, 'success');
+      return file;
+    } catch (error) {
+      this.ui.toast('Could not keep file', error.message || String(error), 'error', 0);
+      return null;
+    } finally {
+      if (locked) {
+        this.fileMutationPending = false;
+        this.renderRuntimeFiles();
+        if (this.projectPersistenceReady) this.projectBackupDebounced();
+      }
+    }
+  }
+
+  async refreshStoredFile(path, runtime) {
+    const file = this.files.get(path);
+    if (!file || file.dirty || this.pendingMirrors.has(path) || this.deletingFiles.has(path) || this.fileSaveQueues.has(path)) return;
+    const listing = await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
+    if (!listing) throw new Error(this.projectPersistenceError || this.runtimeFilesError || 'Wait for the current file operation before opening the runtime version.');
+    return listing;
+  }
+
+  async openExplorerFile(path, { data = false, preview = false } = {}) {
+    const entry = this.explorerFile(path);
+    if (!entry) return;
+    try {
+      if (data) return await this.openDataFile(path);
+      if (entry.runtimeOnly) {
+        if (entry.size > MAX_EDITOR_BYTES) {
+          this.showFileOpenLimit(entry);
+          return;
+        }
+        const content = await this.explorerFileContent(path);
+        if (decodeFileText(content) === null) {
+          this.showFileOpenLimit({ ...entry, content });
+          return;
+        }
+        const file = await this.keepRuntimeFile(path, { open: true });
+        if (file && preview && isEditableFile(file)) return this.previewActiveFile(file.path);
+        return file;
+      }
+      if (entry.inRuntime && !this.engine.running && this.engine.ready) {
+        await this.refreshStoredFile(path, { ...entry, path: entry.virtualPath });
+      }
+      if (preview && isEditableFile(this.files.get(path))) return this.previewActiveFile(path);
+      this.openFile(path);
+    } catch (error) {
+      this.ui.toast('Could not open file', error.message || String(error), 'error');
+    }
   }
 
   renderFileTree() {
     const tree = $('#file-tree');
+    if (!tree) return;
     tree.replaceChildren();
-    $('#project-file-count').textContent = String(this.files.size);
-    if (!this.files.size) {
+    const inProject = this.runtimeFilesPath === '/project' || this.runtimeFilesPath.startsWith('/project/');
+    const prefix = inProject ? this.runtimeFilesPath.slice('/project'.length).replace(/^\//, '') : '';
+    const paths = inProject
+      ? new Set([...this.files.keys(), ...this.runtimeProjectFiles.keys()])
+      : new Set(this.runtimeFiles.filter(entry => !entry.isDirectory).map(entry => entry.path));
+    const visiblePaths = [...paths].filter(path => !prefix || path.startsWith(`${prefix}/`));
+    const files = visiblePaths.map(path => this.explorerFile(path)).filter(Boolean);
+    const directories = inProject
+      ? [...this.runtimeProjectFiles].filter(([path, entry]) => entry.isDirectory && (!prefix || path.startsWith(`${prefix}/`)))
+      : this.runtimeFiles.filter(entry => entry.isDirectory).map(entry => [entry.path, entry]);
+    $('#project-file-count').textContent = String(files.length);
+    this.updateExplorerControls();
+    if (!files.length && !directories.length) {
       tree.className = 'file-tree empty-state compact-empty';
-      tree.innerHTML = `${svg('i-folder')}<p>No project files. Upload files or create a script.</p>`;
+      const detail = this.runtimeFilesError || (this.runtimeFilesLoading ? 'Reading files…' : inProject ? 'No files here. Upload files, create a script, or download data from R.' : 'This directory is empty.');
+      tree.innerHTML = `${svg('i-folder')}<p>${escapeHtml(detail)}</p>`;
       return;
     }
     tree.className = 'file-tree';
+    if (!inProject) {
+      for (const [, entry] of directories) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'file-row folder-row';
+        row.innerHTML = `${svg('i-folder')}<span class="file-name">${escapeHtml(entry.name)}</span>`;
+        row.disabled = this.engine.running || this.fileMutationPending;
+        row.addEventListener('click', () => this.refreshRuntimeFiles(entry.path));
+        tree.append(row);
+      }
+      for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) tree.append(this.renderFileRow(file, 0));
+      return;
+    }
     const root = { folders: new Map(), files: [] };
-    for (const file of [...this.files.values()].sort((a, b) => a.path.localeCompare(b.path))) {
-      const parts = file.path.split('/');
+    const ensureFolders = parts => {
       let node = root;
-      for (const part of parts.slice(0, -1)) {
+      for (const part of parts) {
         if (!node.folders.has(part)) node.folders.set(part, { name: part, folders: new Map(), files: [] });
         node = node.folders.get(part);
       }
-      node.files.push(file);
+      return node;
+    };
+    const localPath = path => prefix ? path.slice(prefix.length + 1) : path;
+    for (const [path] of directories) ensureFolders(localPath(path).split('/'));
+    for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
+      const parts = localPath(file.path).split('/');
+      ensureFolders(parts.slice(0, -1)).files.push(file);
     }
     const expandInitially = !this.folderExpansionInitialized;
     const renderNode = (node, prefix = '', depth = 0) => {
@@ -1223,7 +1722,7 @@ class WebRStudioApp {
       }
       for (const file of node.files) tree.append(this.renderFileRow(file, depth));
     };
-    renderNode(root);
+    renderNode(root, prefix);
     this.folderExpansionInitialized = true;
   }
 
@@ -1236,12 +1735,20 @@ class WebRStudioApp {
     row.dataset.path = file.path;
     row.setAttribute('role', 'treeitem');
     const extension = extname(file.path);
+    const name = file.name || basename(file.path);
     const iconId = isDataPath(file.path) ? 'i-table' : ['md', 'markdown', 'rmd'].includes(extension) ? 'i-book' : extension === 'r' ? 'i-code' : 'i-file';
     const typeClass = isDataPath(file.path) ? 'file-type-data' : ['md', 'markdown', 'rmd'].includes(extension) ? 'file-type-md' : extension === 'r' ? 'file-type-r' : '';
-    row.innerHTML = `${svg(iconId, typeClass)}<span class="file-name" title="${escapeHtml(file.path)}">${escapeHtml(basename(file.path))}</span><span class="file-meta">${formatBytes(file.size)}</span><span class="file-actions"><button class="mini-icon" title="File actions">${svg('i-more')}</button></span>`;
+    const unsavedProjectFile = file.runtimeOnly && file.virtualPath?.startsWith('/project/');
+    const runtimeBadge = file.runtimeOnly
+      ? `<span class="runtime-only" title="${unsavedProjectFile ? 'Automatic project backup has not completed for this file. Keep the page open and resolve any save error.' : 'Exists only in this R session. Use Keep in project to retain it after a restart.'}">${unsavedProjectFile ? 'Not saved' : 'R session'}</span>`
+      : '';
+    row.tabIndex = 0;
+    row.setAttribute('aria-selected', String(selected));
+    row.innerHTML = `${svg(iconId, typeClass)}<span class="file-name" title="${escapeHtml(file.virtualPath || file.path)}">${escapeHtml(name)}</span>${runtimeBadge}<span class="file-meta">${formatBytes(file.size)}</span><span class="file-actions"><button class="mini-icon" data-file-action="delete" title="Delete ${escapeHtml(name)}" aria-label="Delete ${escapeHtml(name)}">${svg('i-trash')}</button><button class="mini-icon" data-file-action="menu" title="File actions" aria-label="Actions for ${escapeHtml(name)}">${svg('i-more')}</button></span>`;
     if (file.dirty) {
-      row.querySelector('.file-meta').className = 'dirty-dot';
-      row.querySelector('.file-meta').textContent = '';
+      const meta = row.querySelector('.file-meta');
+      meta.className = 'dirty-dot';
+      meta.textContent = '';
     }
     row.addEventListener('click', event => {
       if (event.ctrlKey || event.metaKey) {
@@ -1249,13 +1756,14 @@ class WebRStudioApp {
         this.renderFileTree();
       } else {
         this.selectedFiles = new Set([file.path]);
-        this.openFile(file.path);
+        this.renderFileTree();
+        this.openExplorerFile(file.path);
       }
     });
     row.addEventListener('dblclick', event => {
       event.preventDefault();
-      if (isDataPath(file.path)) this.openDataFile(file.path);
-      else if (isPreviewable(file.path)) this.previewActiveFile(file.path);
+      if (isDataPath(file.path)) this.openExplorerFile(file.path, { data: true });
+      else if (isPreviewable(file.path)) this.openExplorerFile(file.path, { preview: true });
     });
     row.addEventListener('contextmenu', event => {
       event.preventDefault();
@@ -1263,26 +1771,53 @@ class WebRStudioApp {
       this.renderFileTree();
       this.showFileContextMenu(file.path, event.clientX, event.clientY);
     });
-    row.querySelector('.file-actions button').addEventListener('click', event => {
+    row.addEventListener('keydown', event => {
+      if (event.target !== row) return;
+      if (event.key === 'Delete') {
+        event.preventDefault();
+        this.deleteFiles(this.selectedFiles.has(file.path) ? [...this.selectedFiles] : [file.path]);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        this.selectedFiles = new Set([file.path]);
+        this.openExplorerFile(file.path);
+      } else if (event.key === ' ') {
+        event.preventDefault();
+        if (this.selectedFiles.has(file.path)) this.selectedFiles.delete(file.path); else this.selectedFiles.add(file.path);
+        this.renderFileTree();
+      }
+    });
+    const deleteButton = row.querySelector('[data-file-action="delete"]');
+    deleteButton.disabled = this.engine.running || this.fileMutationPending || this.runtimeFilesLoading;
+    deleteButton.addEventListener('click', event => {
       event.stopPropagation();
+      this.deleteFiles([file.path]);
+    });
+    row.querySelector('[data-file-action="menu"]').addEventListener('click', event => {
+      event.stopPropagation();
+      if (!this.selectedFiles.has(file.path)) this.selectedFiles = new Set([file.path]);
+      this.renderFileTree();
       this.showFileContextMenu(file.path, event.clientX, event.clientY);
     });
     return row;
   }
 
   showFileContextMenu(path, x, y) {
-    const file = this.files.get(path);
-    const selected = [...this.selectedFiles];
+    const file = this.explorerFile(path);
+    if (!file) return;
+    if (!this.selectedFiles.has(path)) this.selectedFiles = new Set([path]);
+    const selected = [...this.selectedFiles].filter(item => this.explorerFile(item));
+    const busy = this.engine.running || this.fileMutationPending || this.runtimeFilesLoading;
     this.ui.showMenu(null, [
-      { label: 'Open', icon: 'i-file', action: () => this.openFile(path) },
-      { label: 'Open in data viewer', icon: 'i-table', disabled: !isDataPath(path), action: () => this.openDataFile(path) },
-      { label: 'Preview document', icon: 'i-book', disabled: !isPreviewable(path), action: () => this.previewActiveFile(path) },
+      { label: 'Open', icon: 'i-file', disabled: file.runtimeOnly && busy, action: () => this.openExplorerFile(path) },
+      { label: 'Open in data viewer', icon: 'i-table', disabled: !isDataPath(path) || busy, action: () => this.openDataFile(path) },
+      { label: 'Preview document', icon: 'i-book', disabled: !isPreviewable(path) || busy, action: () => this.openExplorerFile(path, { preview: true }) },
+      ...(file.runtimeOnly ? [{ label: 'Keep in project', icon: 'i-save', disabled: busy, action: () => this.keepRuntimeFile(path) }] : []),
       { type: 'separator' },
-      { label: 'Rename…', icon: 'i-code', disabled: selected.length !== 1, action: () => this.renameFile(path) },
-      { label: 'Download', icon: 'i-download', action: () => selected.length > 1 ? this.downloadZip(selected, 'webr-studio-selection.zip') : this.downloadFile(path) },
-      { label: 'Copy project path', icon: 'i-copy', action: () => copyText(`/project/${path}`) },
+      { label: 'Rename…', icon: 'i-code', disabled: selected.length !== 1 || file.runtimeOnly || busy, action: () => this.renameFile(path) },
+      { label: 'Download', icon: 'i-download', disabled: busy && file.inRuntime, action: () => selected.length > 1 ? this.downloadZip(selected, 'webr-studio-selection.zip') : this.downloadFile(path) },
+      { label: 'Copy R path', icon: 'i-copy', action: () => copyText(file.virtualPath) },
       { type: 'separator' },
-      { label: `Delete ${selected.length > 1 ? `${selected.length} files` : basename(path)}`, icon: 'i-trash', action: () => this.deleteFiles(selected) }
+      { label: `Delete ${selected.length > 1 ? `${selected.length} files` : basename(path)}`, icon: 'i-trash', disabled: busy, action: () => this.deleteFiles(selected) }
     ], { context: true, x, y });
   }
 
@@ -1332,8 +1867,16 @@ class WebRStudioApp {
   }
 
   requireIdleRuntime(action = 'This action', offlineDetail = 'Start or restart webR and try again.') {
+    if (this.fileMutationPending) {
+      this.ui.toast('Files are busy', `${action} is available after the current file operation finishes.`, 'warning');
+      return false;
+    }
     if (!this.engine.ready) {
       this.ui.toast('R is offline', offlineDetail, 'warning');
+      return false;
+    }
+    if (!this.projectPersistenceReady) {
+      this.ui.toast('Project files are not ready', 'Restart R to finish restoring the saved project before using the runtime.', 'warning');
       return false;
     }
     if (this.engine.running) {
@@ -1352,9 +1895,7 @@ class WebRStudioApp {
     await this.flushPendingMirrors();
     await this.refreshEnvironment({ retry: true });
     this.runtimeFilesRefreshPending = true;
-    if ($('#panel-files')?.classList.contains('active')) {
-      await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
-    }
+    await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
     if (result.ok && this.settings.checkpointEnvironment) this.checkpointDebounced();
     if (!result.ok) this.console.focus();
     return result;
@@ -1363,6 +1904,10 @@ class WebRStudioApp {
   async executeCode(code, { echo = true } = {}) {
     const source = String(code || '');
     if (!source.trim()) return;
+    if (this.fileMutationPending) {
+      this.ui.toast('Files are busy', 'Wait for the file operation to finish before running R code.', 'warning');
+      return;
+    }
 
     const helpRequest = extractHelpRequest(source);
     if (helpRequest) {
@@ -1373,6 +1918,10 @@ class WebRStudioApp {
 
     if (!this.engine.ready) {
       this.ui.toast('R is not ready', 'The editor remains available, but code execution requires the webR runtime.', 'warning');
+      return;
+    }
+    if (!this.projectPersistenceReady) {
+      this.ui.toast('Project files are not ready', 'Restart R to finish restoring the saved project before running code.', 'warning');
       return;
     }
     if (this.engine.running) {
@@ -1431,7 +1980,7 @@ class WebRStudioApp {
       await this.saveDirtyFiles();
       await this.flushPendingMirrors();
       await this.syncPlotDeviceToViewer({ reflowCurrent: false });
-      const displayedPath = `/project/${normalizePath(file.path)}`;
+      const displayedPath = `/project/${projectRelativePath(file.path)}`;
       await this.console.appendEntry(
         'command',
         `source(${JSON.stringify(displayedPath)}, echo = ${echo ? 'TRUE' : 'FALSE'})`,
@@ -1537,17 +2086,36 @@ class WebRStudioApp {
   async restartRuntime(confirm = false, {
     version = this.settings.webrVersion
   } = {}) {
+    if (this.fileMutationPending) {
+      this.ui.toast('Files are busy', 'Wait for the file operation to finish before restarting R.', 'warning');
+      return false;
+    }
     if (confirm) {
       const accepted = await this.ui.confirm(
         'Restart webR?',
-        'The current R worker will be replaced. Project files stay open and the latest environment checkpoint will be restored when available.',
+        'The current R worker will be replaced. When R is idle, all /project files are saved first. If R is still running, changes made since the last completed backup may be lost. Files outside /project remain temporary. The latest environment checkpoint will be restored when available.',
         { acceptLabel: 'Restart R', danger: false }
       );
       if (!accepted) return;
     }
     this.console?.resetExecutionState();
     try {
+      const wasRunning = this.engine.running;
+      if (!wasRunning && this.engine.ready && this.projectPersistenceReady) await this.flushProjectBackup();
+      else if (!wasRunning) await this.saveDirtyFiles();
       if (this.engine.ready && this.settings.checkpointEnvironment && !this.engine.running) await this.saveRCheckpoint();
+      this.projectBackupDebounced.cancel();
+      this.projectPersistenceReady = false;
+      this.projectPersistenceEpoch += 1;
+      this.runtimeFilesRequest += 1;
+      this.projectSnapshotInProgress = false;
+      this.fileMutationPending = true;
+      if (wasRunning) {
+        // Closing the old worker cancels its RPCs. Do not wait for filesystem
+        // work queued behind a running expression or interactive prompt.
+        this.mirrorOperationQueue = Promise.resolve();
+        this.ui.toast('Restoring the last project backup', 'R was still running. Files written after the last completed backup may be lost.', 'warning', 8000);
+      }
       const requestedVersion = normalizeWebRVersion(version);
       this.setRuntimeState('loading', 'Restarting R…');
       await this.engine.restart({
@@ -1556,9 +2124,7 @@ class WebRStudioApp {
         plotHeight: this.settings.plotHeight,
         onProgress: (_progress, message) => this.setRuntimeState('loading', message)
       });
-      await this.engine.mirrorFiles([...this.files.values()]);
-      this.pendingMirrors.clear();
-      this.pendingMirrorDeletes.clear();
+      await this.restoreProjectFiles();
       if (this.settings.restoreEnvironment) {
         const checkpoint = await workspaceDB.get('rCheckpoint', null);
         if (checkpoint?.length || checkpoint?.byteLength) await this.engine.restoreEnvironment(checkpoint);
@@ -1566,8 +2132,11 @@ class WebRStudioApp {
       this.runtimeAvailable = true;
       this.runtimeFilesPath = '/project';
       this.runtimeFiles = [];
+      this.runtimeProjectFiles.clear();
       this.runtimeFilesError = '';
       this.runtimeFilesRefreshPending = true;
+      this.projectPersistenceReady = true;
+      this.fileMutationPending = false;
       await Promise.all([
         this.refreshEnvironment(),
         this.refreshPackages(),
@@ -1585,6 +2154,7 @@ class WebRStudioApp {
       );
       return true;
     } catch (error) {
+      this.fileMutationPending = false;
       this.runtimeAvailable = false;
       this.setRuntimeState('error', 'Restart failed');
       this.ui.toast('webR restart failed', error.message, 'error', 0);
@@ -1602,6 +2172,7 @@ class WebRStudioApp {
   }
 
   setRuntimeState(state, label, { canStop = state === 'running' } = {}) {
+    this.console?.setRuntimeBusy(state === 'running' || state === 'loading');
     const status = $('#r-status');
     status.dataset.state = state;
     status.querySelector('.runtime-label').textContent = label;
@@ -1769,14 +2340,14 @@ class WebRStudioApp {
   }
 
   runtimeFilesParent(path = this.runtimeFilesPath) {
-    const normalized = normalizeVirtualPath(path);
+    const normalized = String(path).replace(/\/+$/, '') || '/';
     if (normalized === '/') return '/';
     const parent = normalized.split('/').slice(0, -1).join('/');
     return parent || '/';
   }
 
   async refreshRuntimeFiles(path = this.runtimeFilesPath, { quiet = false } = {}) {
-    const target = normalizeVirtualPath(path);
+    const target = explicitVirtualPath(path);
     if (!this.engine.ready) {
       this.runtimeFilesRefreshPending = true;
       this.runtimeFilesPath = target;
@@ -1785,152 +2356,123 @@ class WebRStudioApp {
       if (!quiet) this.ui.toast('R is offline', 'Start webR before browsing its virtual filesystem.', 'warning');
       return null;
     }
-    if (this.engine.running) {
+    if (!this.projectPersistenceReady) {
+      this.runtimeFilesRefreshPending = true;
+      return null;
+    }
+    if (this.engine.running || this.fileMutationPending) {
       this.runtimeFilesRefreshPending = true;
       if (!quiet) this.ui.toast('R is busy', 'Runtime files can be refreshed after the current expression finishes.', 'warning');
       this.renderRuntimeFiles();
       return null;
     }
 
+    this.projectBackupDebounced.cancel();
     const request = ++this.runtimeFilesRequest;
+    const epoch = this.projectPersistenceEpoch;
     this.runtimeFilesLoading = true;
     this.runtimeFilesError = '';
+    this.projectPersistencePending = true;
     this.renderRuntimeFiles();
+    let backupComplete = false;
+    let retry = false;
     try {
-      const listing = await this.engine.listVirtualFiles(target);
-      if (request !== this.runtimeFilesRequest) return null;
-      this.runtimeFilesPath = listing.path;
-      this.runtimeFiles = listing.entries;
-      this.runtimeFilesRefreshPending = false;
-      return listing;
+      return await this.queueMirrorOperation(async () => {
+        if (epoch !== this.projectPersistenceEpoch || !this.projectPersistenceReady ||
+            !this.engine.ready || this.engine.running || this.fileMutationPending) {
+          retry = true;
+          return null;
+        }
+        this.fileMutationPending = true;
+        this.projectSnapshotInProgress = true;
+        this.updateProjectSaveStatus();
+        try {
+          await this.performPendingMirrors();
+          const context = { epoch, runtime: this.engine.webR, generation: this.engine.generation,
+            revision: this.projectRuntimeRevision };
+          const project = await this.engine.listProjectFiles();
+          if (request !== this.runtimeFilesRequest || epoch !== this.projectPersistenceEpoch) return null;
+          const previous = this.runtimeProjectFiles;
+          this.runtimeProjectFiles = new Map(project.entries.map(entry => [entry.path.slice('/project/'.length), entry]));
+          for (const [relative, entry] of this.runtimeProjectFiles) {
+            if (entry.isDirectory && !previous.has(relative)) this.expandedFolders.add(relative);
+          }
+          await this.persistRuntimeProject(project, context);
+          backupComplete = true;
+          const inProject = target === '/project' || target.startsWith('/project/');
+          const directory = inProject && target !== '/project' &&
+            !project.entries.some(entry => entry.path === target && entry.isDirectory) ? '/project' : target;
+          const listing = inProject
+            ? { path: directory, entries: project.entries.filter(entry => this.runtimeFilesParent(entry.path) === directory) }
+            : await this.engine.listVirtualFiles(target);
+          if (request !== this.runtimeFilesRequest || epoch !== this.projectPersistenceEpoch) return null;
+          if (directory !== this.runtimeFilesPath) this.selectedFiles.clear();
+          this.runtimeFilesPath = listing.path;
+          this.runtimeFiles = listing.entries;
+          this.runtimeFilesRefreshPending = this.projectPersistencePending;
+          return listing;
+        } finally {
+          if (epoch === this.projectPersistenceEpoch) {
+            this.projectSnapshotInProgress = false;
+            this.fileMutationPending = false;
+          }
+        }
+      });
     } catch (error) {
-      if (request !== this.runtimeFilesRequest) return null;
+      if (request !== this.runtimeFilesRequest || epoch !== this.projectPersistenceEpoch) return null;
+      if (error.name === 'ProjectSnapshotChanged') {
+        this.projectPersistencePending = true;
+        retry = true;
+        return null;
+      }
       this.runtimeFilesPath = target;
-      this.runtimeFiles = [];
       this.runtimeFilesError = error.message || String(error);
       this.runtimeFilesRefreshPending = true;
-      if (!quiet) this.ui.toast('Could not open runtime directory', this.runtimeFilesError, 'error');
+      if (!backupComplete) {
+        const notify = this.projectPersistenceError !== this.runtimeFilesError;
+        this.projectPersistenceError = this.runtimeFilesError;
+        this.projectPersistencePending = true;
+        if (notify) this.ui.toast('Project backup could not be saved',
+          `${this.runtimeFilesError} The previous backup is unchanged. Keep this page open and retry Refresh after resolving the problem.`, 'error', 0);
+      } else if (!quiet) this.ui.toast('Could not open runtime directory', this.runtimeFilesError, 'error');
       return null;
     } finally {
       if (request === this.runtimeFilesRequest) {
         this.runtimeFilesLoading = false;
+        this.updateProjectSaveStatus();
         this.renderRuntimeFiles();
       }
+      if (retry && this.projectPersistenceReady && !this.engine.running && !this.erasingLocalData) this.projectBackupDebounced();
     }
+  }
+
+  updateExplorerControls() {
+    const pathInput = $('#runtime-files-path');
+    if (!pathInput) return;
+    const busy = Boolean(this.engine.running || this.runtimeFilesLoading || this.fileMutationPending);
+    const interactive = Boolean(this.engine.ready && !busy);
+    if (document.activeElement !== pathInput) pathInput.value = this.runtimeFilesPath;
+    pathInput.disabled = !interactive;
+    $('#runtime-files-up').disabled = !interactive || this.runtimeFilesPath === '/';
+    $('#runtime-files-home').disabled = busy || this.runtimeFilesPath === '/project';
+    $('#runtime-files-refresh').disabled = !interactive;
+    $('#sidebar-delete-files').disabled = busy || ![...this.selectedFiles].some(path => this.explorerFile(path));
+    const status = $('#explorer-file-status');
+    if (this.runtimeFilesError) status.textContent = `Could not refresh: ${this.runtimeFilesError}`;
+    else if (this.projectPersistenceError) status.textContent = `Project backup failed: ${this.projectPersistenceError}`;
+    else if (this.runtimeFilesLoading) status.textContent = 'Refreshing files…';
+    else if (this.fileMutationPending) status.textContent = 'Updating files…';
+    else if (this.engine.running) status.textContent = 'R is running. Files refresh when it finishes.';
+    else if (!this.engine.ready) status.textContent = 'Saved project files. Start R to restore them.';
+    else if (this.projectPersistencePending) status.textContent = 'Project changes are waiting to be saved. Keep this page open.';
+    else if (this.runtimeFilesPath === '/project' || this.runtimeFilesPath.startsWith('/project/')) status.textContent = 'All /project files are saved in this browser. Files and folders restore after a page refresh.';
+    else status.textContent = 'Files outside /project are temporary. Use Keep in project to retain them.';
   }
 
   renderRuntimeFiles() {
-    const container = $('#runtime-files-list');
-    if (!container) return;
-    const pathInput = $('#runtime-files-path');
-    const count = $('#runtime-file-count');
-    const busy = Boolean(this.engine.running || this.runtimeFilesLoading);
-    const interactive = Boolean(this.engine.ready && !busy);
-    pathInput.value = this.runtimeFilesPath;
-    pathInput.disabled = !interactive;
-    $('#runtime-files-up').disabled = !interactive || this.runtimeFilesPath === '/';
-    $('#runtime-files-home').disabled = !interactive || this.runtimeFilesPath === '/project';
-    $('#runtime-files-refresh').disabled = !interactive;
-    count.textContent = String(this.runtimeFiles.length);
-
-    if (this.runtimeFilesLoading) {
-      container.className = 'runtime-files-list empty-state';
-      container.innerHTML = `${svg('i-refresh', 'spin')}<p>Reading ${escapeHtml(this.runtimeFilesPath)}…</p>`;
-      return;
-    }
-    if (!this.engine.ready) {
-      container.className = 'runtime-files-list empty-state';
-      container.innerHTML = `${svg('i-folder')}<p>Runtime files will appear after R starts.</p>`;
-      return;
-    }
-    if (this.runtimeFilesError) {
-      container.className = 'runtime-files-list empty-state';
-      container.innerHTML = `${svg('i-folder')}<p>Could not open this directory.<br><small>${escapeHtml(this.runtimeFilesError)}</small></p><button type="button" class="button secondary compact">Retry</button>`;
-      container.querySelector('button').disabled = busy;
-      container.querySelector('button').addEventListener('click', () => this.refreshRuntimeFiles(this.runtimeFilesPath));
-      return;
-    }
-    if (!this.runtimeFiles.length) {
-      container.className = 'runtime-files-list empty-state';
-      container.innerHTML = `${svg('i-folder')}<p>${busy ? 'R is running. The last file listing will refresh when it finishes.' : 'This runtime directory is empty.'}</p>`;
-      return;
-    }
-
-    container.className = 'runtime-files-list';
-    container.replaceChildren();
-    const header = document.createElement('div');
-    header.className = 'runtime-file-header';
-    header.innerHTML = '<span></span><span>Name</span><span>Size</span><span>Modified</span><span></span>';
-    container.append(header);
-    for (const entry of this.runtimeFiles) {
-      const row = document.createElement('div');
-      row.className = `runtime-file-row${entry.isDirectory ? ' directory' : ''}`;
-      row.dataset.path = entry.path;
-
-      const icon = document.createElement('span');
-      icon.className = 'runtime-file-icon';
-      icon.innerHTML = svg(entry.isDirectory ? 'i-folder' : 'i-file');
-
-      const name = document.createElement('button');
-      name.type = 'button';
-      name.className = 'runtime-file-name';
-      name.textContent = entry.name;
-      name.title = entry.isDirectory ? `Open ${entry.path}` : `Download ${entry.path}`;
-      name.disabled = busy;
-      name.addEventListener('click', () => {
-        if (entry.isDirectory) this.refreshRuntimeFiles(entry.path);
-        else this.downloadRuntimeFile(entry);
-      });
-
-      const size = document.createElement('span');
-      size.className = 'runtime-file-size';
-      size.textContent = entry.isDirectory ? 'Folder' : formatBytes(entry.size);
-
-      const modified = document.createElement('span');
-      modified.className = 'runtime-file-modified';
-      modified.textContent = entry.modifiedAt ? formatDate(entry.modifiedAt) : '–';
-      modified.title = modified.textContent;
-
-      const actions = document.createElement('span');
-      actions.className = 'runtime-file-actions';
-      if (!entry.isDirectory) {
-        const download = document.createElement('button');
-        download.type = 'button';
-        download.className = 'mini-icon';
-        download.title = `Download ${entry.name}`;
-        download.setAttribute('aria-label', `Download ${entry.name}`);
-        download.innerHTML = svg('i-download');
-        download.disabled = busy;
-        download.addEventListener('click', event => {
-          event.stopPropagation();
-          this.downloadRuntimeFile(entry);
-        });
-        actions.append(download);
-      }
-      row.append(icon, name, size, modified, actions);
-      container.append(row);
-    }
+    this.renderFileTree();
   }
 
-  async downloadRuntimeFile(entry) {
-    if (!entry || entry.isDirectory) return;
-    if (!this.requireIdleRuntime('Runtime file download', 'Start webR before downloading runtime files.')) return;
-    if (entry.size > MAX_FILE_BYTES) {
-      const accepted = await this.ui.confirm(
-        `Download ${entry.name}?`,
-        `This file is ${formatBytes(entry.size)} and must be copied from webR memory into browser memory before downloading.`,
-        { acceptLabel: 'Download' }
-      );
-      if (!accepted) return;
-    }
-    try {
-      const bytes = await this.engine.readVirtualFile(entry.path);
-      downloadBlob(new Blob([bytes], { type: mimeFromPath(entry.name) }), basename(entry.path));
-      this.ui.toast('Runtime file downloaded', `${entry.path} · ${formatBytes(bytes.byteLength)}`, 'success');
-    } catch (error) {
-      this.ui.toast('Runtime file download failed', error.message || String(error), 'error', 0);
-    }
-  }
 
   async refreshPackages() {
     if (!this.engine.ready || this.engine.running) return;
@@ -2163,14 +2705,20 @@ class WebRStudioApp {
   }
 
   async openDataFile(path) {
-    const file = this.files.get(path);
-    if (!file || !isDataPath(path)) return;
+    const entry = this.explorerFile(path);
+    const file = entry?.stored;
+    if (!entry || !isDataPath(path)) return;
     this.activatePanel('data');
     const delimiter = extname(path) === 'tsv' ? '\t' : ',';
-    if (this.engine.ready && !this.engine.running) {
+    if (this.engine.ready && !this.engine.running && !this.fileMutationPending) {
       try {
-        await this.mirrorFilesWhenIdle([file]);
-        const objectName = await this.engine.loadDelimitedFile(path, delimiter);
+        // A clean saved copy may be older than a file R just wrote. Read the
+        // runtime version without copying stale project bytes over it.
+        if (file && (!entry.inRuntime || file.dirty || this.pendingMirrors.has(path))) {
+          if (file.dirty) await this.saveFile(path);
+          else await this.mirrorFilesWhenIdle([file]);
+        }
+        const objectName = await this.engine.loadDelimitedFile(entry.virtualPath, delimiter);
         await this.dataViewer.openObject(objectName, basename(path));
         return;
       } catch (error) {
@@ -2179,8 +2727,14 @@ class WebRStudioApp {
     } else if (this.engine.running) {
       this.ui.toast('R is busy', 'Showing a local table preview. Reopen the file after execution to import it into R.', 'info');
     }
-    const text = typeof file.content === 'string' ? file.content : textDecoder.decode(file.content);
-    this.dataViewer.openDelimited(path, text, delimiter);
+    try {
+      const content = file?.dirty || this.engine.running ? file?.content : await this.explorerFileContent(path);
+      if (content == null) throw new Error('Wait for R to finish before opening this session file.');
+      const text = typeof content === 'string' ? content : textDecoder.decode(content);
+      this.dataViewer.openDelimited(path, text, delimiter);
+    } catch (error) {
+      this.ui.toast('Could not open data file', error.message || String(error), 'warning');
+    }
   }
 
   bindPlotResizing() {
@@ -2435,7 +2989,9 @@ class WebRStudioApp {
     };
 
     const appendOutput = (chunk, item, options) => {
-      const kind = item.type === 'stderr' ? 'error' : item.type;
+      // Raw stderr also carries progress; R conditions already have explicit
+      // message, warning, and error types from the runtime helper.
+      const kind = item.type;
       if (kind === 'message' && options.message === false) return;
       if (kind === 'warning' && options.warning === false) return;
       const mode = resultMode(options);
@@ -2620,9 +3176,7 @@ class WebRStudioApp {
       commitGfmArtifact();
       await this.refreshEnvironment();
       this.runtimeFilesRefreshPending = true;
-      if ($('#panel-files')?.classList.contains('active')) {
-        await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
-      }
+      await this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
       if (this.settings.checkpointEnvironment) this.checkpointDebounced();
     } catch (error) {
       const failure = document.createElement('section');
@@ -2848,9 +3402,13 @@ class WebRStudioApp {
     if (persist) this.persistSettingsDebounced();
     if (name === 'workspace') this.renderSnapshots();
     if (name === 'gists') $('#gist-reference').focus();
+    if (name === 'explorer' && persist && this.runtimeFilesRefreshPending && !this.runtimeFilesLoading && this.engine.ready && !this.engine.running) {
+      this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
+    }
   }
 
   activatePanel(name, persist = true) {
+    if (name === 'files') return this.activateSidebar('explorer', persist);
     const view = $(`#panel-${name}`);
     if (!view) return;
     const pane = view.closest('.dock-pane');
@@ -2860,9 +3418,6 @@ class WebRStudioApp {
     this.settings.activeDock[dock] = name;
     if (persist) this.persistSettingsDebounced();
     if (name === 'environment') this.refreshEnvironment();
-    if (name === 'files' && (this.runtimeFilesRefreshPending || !this.runtimeFiles.length)) {
-      this.refreshRuntimeFiles(this.runtimeFilesPath, { quiet: true });
-    }
     if (name === 'packages') this.refreshPackages();
     if (name === 'plots') {
       this.renderPlots();
@@ -3063,7 +3618,7 @@ class WebRStudioApp {
 
   showDockOptionsMenu(anchor, dock) {
     const labels = {
-      environment: 'Environment', files: 'Runtime files', outline: 'Outline', packages: 'Packages',
+      environment: 'Environment', outline: 'Outline', packages: 'Packages',
       plots: 'Plots', help: 'Help', data: 'Data viewer', preview: 'Document preview'
     };
     const active = this.settings.activeDock[dock] || this.settings.dockPanels[dock]?.[0];
@@ -3252,11 +3807,14 @@ class WebRStudioApp {
       const accepted = await this.ui.confirm('Erase all local IDE data?', 'This removes project files, settings, console input and output, history, snapshots, the GitHub token, plots, and R checkpoints from this browser.', { acceptLabel: 'Erase everything' });
       if (!accepted) return;
       this.erasingLocalData = true;
+      this.projectPersistenceReady = false;
+      this.projectPersistenceEpoch += 1;
+      this.runtimeFilesRequest += 1;
       try {
         for (const task of [
           this.autosaveDebounced, this.persistWorkspaceDebounced, this.persistSettingsDebounced,
           this.checkpointDebounced, this.environmentDebounced, this.gistTokenDebounced,
-          this.plotResizeDebounced
+          this.plotResizeDebounced, this.projectBackupDebounced
         ]) task?.cancel?.();
         this.console?.resetAll();
         this.consoleState = { history: [], transcript: [], draft: '' };
@@ -3274,6 +3832,7 @@ class WebRStudioApp {
         $('#persist-gist-token').checked = false;
         try { await this.engine.close(); } catch { /* The worker may already be stopped. */ }
         await Promise.allSettled([...this.fileSaveQueues.values()]);
+        await this.mirrorOperationQueue;
         this.fileSaveQueues.clear();
         await workspaceDB.clearEverything();
         location.replace(location.pathname);
@@ -3399,6 +3958,7 @@ class WebRStudioApp {
       { title: 'Jump to function definition', detail: 'Code', icon: 'i-code', shortcut: 'F12', action: () => this.editor.jumpToDefinition() },
       { title: 'Check selected code with Mistral', detail: 'AI', icon: 'i-sparkles', action: () => this.checkCodeWithMistral() },
       { title: 'Restart webR', detail: 'Session', icon: 'i-refresh', action: () => this.restartRuntime(true) },
+      { title: 'Networking', detail: 'Browser, Tailscale, or Cloudflare Worker downloads', icon: 'i-network', action: () => this.networkUI.open() },
       { title: 'Stop R execution', detail: 'Session', icon: 'i-stop', action: () => this.stopExecution() },
       { title: 'Clear global environment', detail: 'Session', icon: 'i-trash', action: () => this.clearEnvironment() },
       { title: 'Install R package', detail: 'Packages', icon: 'i-plus', action: () => this.installPackage() },
@@ -3610,9 +4170,9 @@ class WebRStudioApp {
     try {
       $('#import-gist-button').disabled = true;
       const gist = await importGist(reference, token);
-      const existing = new Set(this.files.keys());
+      const existing = new Set([...this.files.keys(), ...this.runtimeProjectFiles.keys()]);
       const oversized = gist.files.find(file => Number(file.size) > MAX_FILE_BYTES);
-      if (oversized) throw new Error(`${oversized.path} exceeds the 100 MB browser workspace limit.`);
+      if (oversized) throw new Error(`${oversized.path} exceeds the 100 MB import limit.`);
       const records = gist.files.map(file => {
         const path = makeUniqueName(file.path, existing);
         existing.add(path);
@@ -3681,6 +4241,7 @@ class WebRStudioApp {
   }
 
   async serializeWorkspace({ includeCheckpoint = true } = {}) {
+    await this.flushProjectBackup();
     const files = [...this.files.values()].map(file => ({
       path: file.path,
       type: file.type,
@@ -3701,12 +4262,13 @@ class WebRStudioApp {
       createdAt: Date.now(),
       settings: clone(this.settings),
       files,
+      directories: [...this.projectDirectories],
       openTabs: [...this.openTabs],
       activePath: this.activePath,
       console: {
         history: [...(this.console?.history || this.consoleState.history)],
         transcript: clone(this.console?.transcript || this.consoleState.transcript),
-        draft: this.console?.getValue?.() ?? this.consoleState.draft
+        draft: this.console?.getPersistableDraft?.() ?? this.consoleState.draft
       },
       plots: clone(this.plots),
       expandedFolders: [...this.expandedFolders],
@@ -3717,68 +4279,119 @@ class WebRStudioApp {
   async applyWorkspaceState(state, { persist = true, live = true } = {}) {
     if (!state || state.format !== 'webr-studio-workspace' || !Array.isArray(state.files)) throw new Error('This is not a valid webR Studio workspace.');
     if (live && this.engine.running) throw new Error('Stop the current R expression before replacing the workspace.');
-    this.autosaveDebounced?.cancel?.();
-    this.persistWorkspaceDebounced?.cancel?.();
-    this.persistSettingsDebounced?.cancel?.();
-    this.checkpointDebounced?.cancel?.();
-    this.environmentDebounced?.cancel?.();
-    await Promise.allSettled([...this.fileSaveQueues.values()]);
-    this.persistWorkspaceDebounced?.cancel?.();
-    this.fileSaveQueues.clear();
-    this.deletingFiles.clear();
-    this.pendingMirrors.clear();
-    this.pendingMirrorDeletes.clear();
+    if (this.fileMutationPending) throw new Error('Wait for the current file operation before replacing the workspace.');
+    // Reject malformed imports before disabling the current project's backup.
     const newFiles = new Map();
     for (const item of state.files) {
       const content = item.encoding === 'base64url' ? base64UrlToBytes(item.content) : String(item.content || '');
       const record = fileRecord({ ...item, content });
       newFiles.set(record.path, record);
     }
-    if (persist) {
-      await workspaceDB.clearFiles();
-      await workspaceDB.putFiles([...newFiles.values()]);
-      if (state.rCheckpoint) await workspaceDB.set('rCheckpoint', base64UrlToBytes(state.rCheckpoint));
-      else await workspaceDB.delete('rCheckpoint');
-    }
-    this.settings = deepSettings(state.settings || {});
-    this.files = newFiles;
-    this.openTabs = (state.openTabs || []).filter(path => newFiles.has(path));
-    this.activePath = [state.activePath, ...this.openTabs, ...newFiles.keys()]
-      .find(path => isEditableFile(newFiles.get(path))) || null;
-    this.consoleState = {
-      history: state.console?.history || [],
-      transcript: state.console?.transcript || [],
-      draft: state.console?.draft || ''
+    const directories = (Array.isArray(state.directories) ? state.directories : []).map(projectRelativePath);
+    const checkpoint = state.rCheckpoint ? base64UrlToBytes(state.rCheckpoint) : null;
+    const previousPersistence = {
+      ready: this.projectPersistenceReady, pending: this.projectPersistencePending,
+      error: this.projectPersistenceError, runtime: this.engine.webR, generation: this.engine.generation
     };
-    this.plots = Array.isArray(state.plots) ? state.plots.slice(-30) : [];
-    this.plotIndex = this.plots.length ? this.plots.length - 1 : -1;
-    this.expandedFolders = new Set(state.expandedFolders || []);
-    this.folderExpansionInitialized = Array.isArray(state.expandedFolders);
+    let replacementCommitted = false;
+    this.projectBackupDebounced.cancel();
+    this.projectPersistenceReady = false;
+    this.projectPersistenceEpoch += 1;
+    this.runtimeFilesRequest += 1;
     this.autosaveDebounced?.cancel?.();
-    this.autosaveDebounced = debounce(() => this.saveDirtyFiles(), this.settings.autosaveDelay);
-    if (persist) {
-      await workspaceDB.set('settings', this.settings);
-      await this.persistWorkspaceMeta();
-    }
-    if (live && this.editor) {
-      for (const path of [...this.editor.files.keys()]) this.editor.removeFile(path);
-      for (const file of this.files.values()) if (isEditableFile(file)) this.editor.addOrUpdateFile(file);
-      this.console.history = [...this.consoleState.history];
-      this.console.historyIndex = this.console.history.length;
-      this.console.transcript = [...this.consoleState.transcript];
-      this.console.setValue(this.consoleState.draft);
-      await this.console.renderTranscript();
-      this.applyAppearance();
-      this.restoreDockLayout();
-      this.renderAll();
-      this.openInitialFile();
-      if (this.engine.ready) {
-        await this.engine.clearEnvironment().catch(() => {});
-        await this.engine.clearMirroredFiles();
-        await this.mirrorFilesWhenIdle(this.files.values());
-        if (state.rCheckpoint) await this.engine.restoreEnvironment(base64UrlToBytes(state.rCheckpoint));
-        await this.refreshEnvironment();
+    this.persistWorkspaceDebounced?.cancel?.();
+    this.persistSettingsDebounced?.cancel?.();
+    this.checkpointDebounced?.cancel?.();
+    this.environmentDebounced?.cancel?.();
+    this.fileMutationPending = true;
+    try {
+      await Promise.allSettled([...this.fileSaveQueues.values()]);
+      await this.mirrorOperationQueue;
+      this.persistWorkspaceDebounced?.cancel?.();
+      if (persist) {
+        await workspaceDB.commitProjectSnapshot({ files: [...newFiles.values()],
+          deletedPaths: [...this.files.keys()].filter(path => !newFiles.has(path)), directories });
       }
+      replacementCommitted = true;
+      this.fileSaveQueues.clear();
+      this.deletingFiles.clear();
+      this.pendingMirrors.clear();
+      this.pendingMirrorDeletes.clear();
+      this.runtimeProjectFiles.clear();
+      this.runtimeFiles = [];
+      this.runtimeFilesPath = '/project';
+      this.runtimeFilesRefreshPending = true;
+      this.settings = deepSettings(state.settings || {});
+      this.files = newFiles;
+      this.projectDirectories = new Set(directories);
+      this.runtimeKnownFiles.clear();
+      this.projectPersistenceError = '';
+      this.projectPersistencePending = false;
+      if (persist) {
+        if (checkpoint) await workspaceDB.set('rCheckpoint', checkpoint);
+        else await workspaceDB.delete('rCheckpoint');
+      }
+      this.openTabs = (state.openTabs || []).filter(path => newFiles.has(path));
+      this.activePath = [state.activePath, ...this.openTabs, ...newFiles.keys()]
+        .find(path => isEditableFile(newFiles.get(path))) || null;
+      this.consoleState = {
+        history: state.console?.history || [],
+        transcript: state.console?.transcript || [],
+        draft: state.console?.draft || ''
+      };
+      this.plots = Array.isArray(state.plots) ? state.plots.slice(-30) : [];
+      this.plotIndex = this.plots.length ? this.plots.length - 1 : -1;
+      this.expandedFolders = new Set(state.expandedFolders || []);
+      this.folderExpansionInitialized = Array.isArray(state.expandedFolders);
+      this.autosaveDebounced?.cancel?.();
+      this.autosaveDebounced = debounce(() => this.saveDirtyFiles(), this.settings.autosaveDelay);
+      if (persist) {
+        await workspaceDB.set('settings', this.settings);
+        await this.persistWorkspaceMeta();
+      }
+      if (live && this.editor) {
+        for (const path of [...this.editor.files.keys()]) this.editor.removeFile(path);
+        for (const file of this.files.values()) if (isEditableFile(file)) this.editor.addOrUpdateFile(file);
+        this.console.history = [...this.consoleState.history];
+        this.console.historyIndex = this.console.history.length;
+        this.console.transcript = [...this.consoleState.transcript];
+        this.console.setValue(this.consoleState.draft);
+        await this.console.renderTranscript();
+        this.applyAppearance();
+        this.restoreDockLayout();
+        this.renderAll();
+        this.openInitialFile();
+        if (this.engine.ready) {
+          await this.engine.clearEnvironment().catch(() => {});
+          await this.engine.clearMirroredFiles();
+          await this.restoreProjectFiles();
+          if (checkpoint) await this.engine.restoreEnvironment(checkpoint);
+          this.projectPersistenceReady = true;
+          await this.refreshEnvironment();
+          this.fileMutationPending = false;
+          await this.refreshRuntimeFiles('/project', { quiet: true });
+        }
+      }
+    } catch (error) {
+      if (!replacementCommitted && previousPersistence.runtime === this.engine.webR &&
+          previousPersistence.generation === this.engine.generation) {
+        this.projectPersistenceReady = previousPersistence.ready;
+        this.projectPersistenceError = previousPersistence.error;
+        this.projectPersistencePending = previousPersistence.pending || Boolean(this.pendingMirrors.size ||
+          this.pendingMirrorDeletes.size || [...this.files.values()].some(file => file.dirty));
+        this.runtimeFilesLoading = false;
+        this.projectSnapshotInProgress = false;
+        if (this.projectPersistenceReady && this.projectPersistencePending) this.projectBackupDebounced();
+        if ([...this.files.values()].some(file => file.dirty)) this.autosaveDebounced();
+      } else if (replacementCommitted) {
+        this.projectPersistenceReady = false;
+        this.projectPersistencePending = true;
+        this.projectPersistenceError = `The imported files were saved, but project restoration did not finish: ${error.message || String(error)} Restart R to restore the saved project.`;
+      }
+      throw error;
+    } finally {
+      this.fileMutationPending = false;
+      this.updateProjectSaveStatus();
     }
   }
 
@@ -3886,7 +4499,7 @@ class WebRStudioApp {
       activePath: this.activePath,
       consoleHistory: this.console?.history || this.consoleState.history,
       consoleTranscript: this.console?.transcript || this.consoleState.transcript,
-      consoleDraft: this.console?.getValue?.() ?? this.consoleState.draft,
+      consoleDraft: this.console?.getPersistableDraft?.() ?? this.consoleState.draft,
       plots: this.plots.slice(-30),
       expandedFolders: [...this.expandedFolders],
       updatedAt: Date.now()

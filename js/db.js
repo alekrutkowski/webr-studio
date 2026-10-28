@@ -15,9 +15,10 @@ function requestToPromise(request) {
 
 function transactionDone(transaction) {
   return new Promise((resolve, reject) => {
+    let requestError = null;
     transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error || new Error('IndexedDB transaction failed'));
-    transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
+    transaction.onerror = event => { requestError = event.target?.error || transaction.error || requestError; };
+    transaction.onabort = () => reject(transaction.error || requestError || new Error('IndexedDB transaction aborted'));
   });
 }
 
@@ -123,6 +124,27 @@ export class WorkspaceDB {
       store.put({ ...file, createdAt: file.createdAt || now, updatedAt: now });
     }
     await transactionDone(transaction);
+  }
+
+  async commitProjectSnapshot({ files, deletedPaths, directories }, canCommit = () => true) {
+    const database = await this.open();
+    if (!canCommit()) throw new Error('The project changed before its backup could be saved.');
+    // File replacements, deletions and the directory manifest form one backup.
+    // A quota error or aborted transaction must leave the previous backup intact.
+    const transaction = database.transaction([STORES.FILES, STORES.KV], 'readwrite');
+    const completion = transactionDone(transaction);
+    try {
+      const store = transaction.objectStore(STORES.FILES);
+      const now = Date.now();
+      for (const path of deletedPaths) store.delete(path);
+      for (const file of files) store.put({ ...file, createdAt: file.createdAt || now, updatedAt: file.updatedAt || now });
+      transaction.objectStore(STORES.KV).put({ key: 'projectDirectories', value: directories, updatedAt: now });
+    } catch (error) {
+      transaction.abort();
+      await completion.catch(() => {});
+      throw error;
+    }
+    await completion;
   }
 
   async deleteFile(path) {

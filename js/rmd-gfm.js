@@ -201,7 +201,7 @@ function figuresVisible(options = {}) {
 function formattedOutput(item = {}) {
   const text = normalizeLineEndings(item.text || '').replace(/\n+$/, '');
   if (!text) return '';
-  const type = item.type === 'stderr' ? 'error' : String(item.type || 'stdout').toLowerCase();
+  const type = String(item.type || 'stdout').toLowerCase();
   const prefix = type === 'warning'
     ? 'Warning: '
     : type === 'error'
@@ -278,10 +278,10 @@ export class RMarkdownGfmBuilder {
     };
 
     for (const item of result.outputs || []) {
-      const type = item.type === 'stderr' ? 'error' : String(item.type || 'stdout').toLowerCase();
+      const type = String(item.type || 'stdout').toLowerCase();
       if (type === 'message' && options.message === false) continue;
       if (type === 'warning' && options.warning === false) continue;
-      if (['stdout', 'error'].includes(type) && ['hide', 'false'].includes(mode)) continue;
+      if (['stdout', 'stderr', 'error'].includes(type) && ['hide', 'false'].includes(mode)) continue;
 
       if (type === 'stdout' && mode === 'asis') {
         flushRegular();

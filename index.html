@@ -12,8 +12,8 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preconnect" href="https://webr.r-wasm.org" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=1.2.12">
-  <script src="coi-serviceworker.js?v=1.2.12"></script>
+  <link rel="stylesheet" href="styles.css?v=1.5.4">
+  <script src="coi-serviceworker.js?v=1.5.4"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict/ace.js"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/dompurify@3.2.7/dist/purify.min.js"></script>
@@ -46,7 +46,7 @@
     <symbol id="i-box" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 8 9 5 9-5v8l-9 5-9-5z"/></symbol>
     <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.6 2.1c-.9.5-1.4 1-1.4 2M12 17h.01"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></symbol>
-    <symbol id="i-github" viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.2 19.5v-2.2c-2.7.6-3.3-1.2-3.3-1.2-.4-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.1-.2-4.3-1.1-4.3-4.7 0-1 .4-1.9 1-2.6-.1-.3-.4-1.3.1-2.6 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.3.2 2.3.1 2.6.6.7 1 1.6 1 2.6 0 3.6-2.2 4.4-4.3 4.7.4.3.7.9.7 1.8v3.1A10 10 0 0 0 12 2Z"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.2 19.5v-2.2c-2.7.6-3.3-1.2-3.3-1.2-.4-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.1-.2-4.3-1.1-4.3-4.7 0-1 .4-1.9 1-2.6-.1-.3-.4-1.3.3-2.6 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.3.3 2.3.1 2.6.6.7 1 1.6 1 2.6 0 3.6-2.2 4.4-4.3 4.7.4.3.7.9.7 1.8v3.1A10 10 0 0 0 12 2Z"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8zM6 7l1 14h10l1-14M10 11v6m4-6v6"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
@@ -56,6 +56,7 @@
     <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v5l-4 2v-7z"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="18" r="3"/><circle cx="19" cy="18" r="3"/><path d="m10.5 7.6-4 7.8m7-7.8 4 7.8M8 18h8"/></symbol>
     <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m0-9h12"/></symbol>
     <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
     <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H4z"/><path d="M20 4h-6a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h6z"/></symbol>
@@ -97,6 +98,7 @@
         <svg class="ui-icon"><use href="#i-search"></use></svg><span>Search commands</span><kbd>Ctrl Shift P</kbd>
       </button>
       <div class="title-actions">
+        <button id="network-button" class="button ghost compact network-button" title="Networking: browser downloads" aria-label="Open networking" aria-haspopup="dialog" aria-controls="network-dialog"><svg class="ui-icon" aria-hidden="true"><use href="#i-network"></use></svg><span class="network-button-label">Networking</span><span class="status-dot small network-button-dot" aria-hidden="true"></span></button>
         <button id="share-url-button" class="icon-button" title="Share workspace URL"><svg class="ui-icon"><use href="#i-link"></use></svg></button>
         <button id="theme-button" class="icon-button" title="Change color theme"><svg class="ui-icon"><use href="#i-sun"></use></svg></button>
         <button id="settings-button" class="icon-button" title="Settings"><svg class="ui-icon"><use href="#i-settings"></use></svg></button>
@@ -158,14 +160,26 @@
             <span>EXPLORER</span>
             <div>
               <button id="sidebar-new-file" class="mini-icon" title="New file" aria-label="New file" aria-haspopup="menu" aria-expanded="false"><svg class="ui-icon"><use href="#i-plus"></use></svg></button>
-              <button id="sidebar-upload" class="mini-icon" title="Upload files"><svg class="ui-icon"><use href="#i-upload"></use></svg></button>
-              <button id="sidebar-upload-folder" class="mini-icon" title="Upload folder"><svg class="ui-icon"><use href="#i-folder"></use></svg></button>
-              <button id="sidebar-download-all" class="mini-icon" title="Download workspace as ZIP"><svg class="ui-icon"><use href="#i-download"></use></svg></button>
+              <button id="sidebar-upload" class="mini-icon" title="Upload files" aria-label="Upload files"><svg class="ui-icon"><use href="#i-upload"></use></svg></button>
+              <button id="sidebar-upload-folder" class="mini-icon" title="Upload folder" aria-label="Upload folder"><svg class="ui-icon"><use href="#i-folder"></use></svg></button>
+              <button id="sidebar-download-all" class="mini-icon" title="Download workspace as ZIP" aria-label="Download workspace as ZIP"><svg class="ui-icon"><use href="#i-download"></use></svg></button>
               <button class="mini-icon pane-maximize-button" data-maximize-pane="sidebar" title="Maximize Project pane" aria-label="Maximize Project pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button>
             </div>
           </div>
+          <div class="explorer-navigation">
+            <div class="explorer-path-row">
+              <button id="runtime-files-up" class="mini-icon" type="button" title="Parent directory" aria-label="Open parent directory"><svg class="ui-icon rotate-up"><use href="#i-chevron"></use></svg></button>
+              <button id="runtime-files-home" class="mini-icon" type="button" title="Open /project" aria-label="Open project directory"><svg class="ui-icon"><use href="#i-folder"></use></svg></button>
+              <div class="input-with-icon small flex-fill runtime-files-path"><input id="runtime-files-path" type="text" value="/project" spellcheck="false" autocomplete="off" aria-label="File directory path" title="Enter a directory path and press Enter"></div>
+            </div>
+            <div class="explorer-file-actions">
+              <button id="sidebar-delete-files" class="button danger-ghost small" type="button" title="Delete selected files" disabled><svg class="ui-icon"><use href="#i-trash"></use></svg><span>Delete selected</span></button>
+              <button id="runtime-files-refresh" class="button ghost small" type="button" title="Refresh files"><svg class="ui-icon"><use href="#i-refresh"></use></svg><span>Refresh</span></button>
+            </div>
+            <p id="explorer-file-status" class="explorer-file-status" role="status" aria-live="polite" aria-atomic="true">All regular files under /project are saved automatically in this browser.</p>
+          </div>
           <div class="sidebar-section open">
-            <button class="section-header"><svg class="ui-icon"><use href="#i-chevron"></use></svg><span>PROJECT</span><span id="project-file-count" class="muted-count">0</span></button>
+            <button class="section-header"><svg class="ui-icon"><use href="#i-chevron"></use></svg><span>FILES</span><span id="project-file-count" class="muted-count">0</span></button>
             <div id="file-tree" class="file-tree" role="tree"></div>
           </div>
           <div class="sidebar-section open flex-fill">
@@ -267,12 +281,17 @@
             </div>
           </div>
           <div id="console-output" class="console-output" role="log" aria-live="polite"></div>
+          <div id="console-input-request" class="console-input-request" role="status" aria-live="polite" hidden>
+            <strong id="console-input-message"></strong>
+            <span>Enter a one-line response, then press Enter. Use Stop to cancel. Replies are not added to console history.</span>
+            <span id="console-input-error" class="console-input-error"></span>
+          </div>
           <div class="console-input-wrap">
             <div id="console-prompt" class="console-prompt">&gt;</div>
             <div id="console-input" class="ace-host console-input" aria-label="R console input"></div>
             <textarea id="fallback-console" class="fallback-console" spellcheck="false" aria-label="R console input fallback" hidden></textarea>
             <div class="console-input-actions">
-              <button id="console-run-button" class="mini-icon primary-icon" title="Run expression (Ctrl+Enter)"><svg class="ui-icon"><use href="#i-play"></use></svg></button>
+              <button id="console-run-button" class="mini-icon primary-icon" title="Run expression (Ctrl+Enter)" aria-label="Run expression (Ctrl+Enter)"><svg class="ui-icon"><use href="#i-play"></use></svg><span class="console-send-label" hidden>Send</span></button>
             </div>
           </div>
         </section>
@@ -285,7 +304,6 @@
           <div class="pane-tabs-row">
             <div class="tabs compact-tabs dock-tabs" data-dock-tabs="top" role="tablist">
               <button class="tab active" draggable="true" data-panel="environment">Environment</button>
-              <button class="tab" draggable="true" data-panel="files">Files <span id="runtime-file-count" class="badge count">0</span></button>
               <button class="tab" draggable="true" data-panel="outline">Outline</button>
               <button class="tab" draggable="true" data-panel="packages">Packages</button>
             </div>
@@ -302,15 +320,6 @@
                 <button id="environment-clean-button" class="button danger-ghost compact" title="Remove all objects"><svg class="ui-icon"><use href="#i-trash"></use></svg><span>Clear all</span></button>
               </div>
               <div id="environment-table" class="environment-table empty-state"><svg class="ui-icon"><use href="#i-box"></use></svg><p>The global environment is empty.</p></div>
-            </section>
-            <section id="panel-files" class="panel-view" data-panel-view="files">
-              <div class="panel-toolbar runtime-files-toolbar">
-                <button id="runtime-files-up" class="mini-icon" type="button" title="Parent directory" aria-label="Open parent directory"><svg class="ui-icon rotate-up"><use href="#i-chevron"></use></svg></button>
-                <button id="runtime-files-home" class="mini-icon" type="button" title="Open /project" aria-label="Open project directory"><svg class="ui-icon"><use href="#i-folder"></use></svg></button>
-                <div class="input-with-icon small flex-fill runtime-files-path"><svg class="ui-icon"><use href="#i-file"></use></svg><input id="runtime-files-path" type="text" value="/project" spellcheck="false" aria-label="Runtime filesystem path"></div>
-                <button id="runtime-files-refresh" class="mini-icon" type="button" title="Refresh runtime files" aria-label="Refresh runtime files"><svg class="ui-icon"><use href="#i-refresh"></use></svg></button>
-              </div>
-              <div id="runtime-files-list" class="runtime-files-list empty-state"><svg class="ui-icon"><use href="#i-folder"></use></svg><p>Runtime files will appear after R starts.</p></div>
             </section>
             <section id="panel-outline" class="panel-view" data-panel-view="outline">
               <div class="panel-toolbar"><div class="input-with-icon small"><svg class="ui-icon"><use href="#i-search"></use></svg><input id="outline-filter" type="search" placeholder="Filter symbols"></div></div>
@@ -490,6 +499,103 @@
     </form>
   </dialog>
 
+  <dialog id="network-dialog" class="dialog network-dialog" aria-labelledby="network-dialog-title" aria-describedby="network-dialog-description">
+    <form method="dialog" class="dialog-frame" novalidate>
+      <header class="dialog-header"><div><h2 id="network-dialog-title">Networking</h2><p id="network-dialog-description">Choose how R downloads data from URLs.</p></div><button class="icon-button" value="cancel" aria-label="Close networking"><svg class="ui-icon"><use href="#i-x"></use></svg></button></header>
+      <div class="dialog-content network-content">
+        <div class="network-provider">
+          <label for="network-provider">Download route</label>
+          <select id="network-provider" aria-describedby="network-provider-help"><option value="browser">Browser direct (CORS)</option><option value="tailscale">Tailscale</option><option value="cloudflare">Cloudflare Worker proxy</option></select>
+          <p id="network-provider-help" class="network-help">Browser downloads follow the data server's CORS rules. Choose another route for servers that do not allow browser requests.</p>
+        </div>
+        <div id="network-status" class="network-status-card" data-state="disconnected" role="status" aria-live="polite" aria-atomic="true">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div><strong id="network-status-title">Browser downloads</strong><p id="network-status-message">R downloads use the browser's usual CORS rules.</p></div>
+        </div>
+        <div class="network-actions">
+          <button id="network-disconnect" type="button" class="button secondary" hidden>Disconnect</button>
+        </div>
+        <p id="network-action-error" class="network-error" role="alert" hidden></p>
+
+        <div id="network-tailscale-settings" class="network-provider-panel" hidden>
+          <ol class="network-steps">
+            <li>Connect and sign in to your Tailscale account.</li>
+            <li>Choose an exit node for public internet downloads.</li>
+            <li>Use <code>download.file()</code> or read URLs directly in R.</li>
+          </ol>
+          <div class="network-actions">
+            <button id="network-connect" type="button" class="button primary"><svg class="ui-icon" aria-hidden="true"><use href="#i-network"></use></svg><span id="network-connect-label">Connect to Tailscale</span></button>
+            <a id="network-login" class="button primary" target="_blank" rel="noopener noreferrer" hidden>Sign in to Tailscale<svg class="ui-icon" aria-hidden="true"><use href="#i-external"></use></svg></a>
+          </div>
+          <p id="network-login-hint" class="network-help" hidden>Approve this device in the sign-in tab, then return here. This panel updates automatically.</p>
+          <section class="network-section" aria-labelledby="network-exit-heading">
+            <div class="network-section-heading"><h3 id="network-exit-heading">Internet access</h3><span id="network-route-badge" class="network-route-badge">Not connected</span></div>
+            <label for="network-exit-node">Exit node</label>
+            <div class="network-input-row"><select id="network-exit-node" aria-describedby="network-exit-help" disabled><option value="">Tailnet only</option></select><button id="network-refresh" type="button" class="button secondary" title="Refresh available exit nodes" aria-label="Refresh available exit nodes" disabled><svg class="ui-icon" aria-hidden="true"><use href="#i-refresh"></use></svg></button></div>
+            <p id="network-exit-help" class="network-help">Public internet access requires an exit node on another device in your Tailscale network. Enable and approve it once, then refresh this list. <a href="https://tailscale.com/docs/features/exit-nodes" target="_blank" rel="noopener noreferrer">Set up an exit node<svg class="ui-icon" aria-hidden="true"><use href="#i-external"></use></svg></a></p>
+            <label for="network-dns-mode">DNS for public hostnames</label>
+            <div class="network-input-row"><select id="network-dns-mode" aria-describedby="network-dns-help" disabled><option value="exit-node">Exit node DNS</option><option value="cloudflare">Cloudflare through exit node</option></select></div>
+            <p id="network-dns-help" class="network-help">Exit node DNS is the default. Cloudflare DNS sends public hostname queries through Tailscale to Cloudflare. Known tailnet names and configured private DNS zones keep their usual route. This DNS option still requires your Tailscale exit node.</p>
+            <div id="network-ip-row" class="network-ip-row" hidden><span>This tab's Tailscale IP</span><code id="network-ip"></code><button id="network-copy-ip" type="button" class="mini-icon" title="Copy Tailscale IP" aria-label="Copy Tailscale IP"><svg class="ui-icon" aria-hidden="true"><use href="#i-copy"></use></svg></button></div>
+          </section>
+        </div>
+
+        <section id="network-cloudflare-settings" class="network-section" aria-labelledby="network-cloudflare-heading" hidden>
+          <h3 id="network-cloudflare-heading">Cloudflare Worker proxy</h3>
+          <p class="network-help">Download public HTTP or HTTPS data through a Worker you control. This route needs no Tailscale account or exit node.</p>
+          <details id="network-proxy-guide" class="network-setup-guide">
+            <summary>Set up a free Worker, step by step</summary>
+            <ol class="network-setup-steps">
+              <li>Open the <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">Cloudflare dashboard</a>. In <strong>Workers &amp; Pages</strong>, choose <strong>Create application</strong>, then <strong>Start with Hello World!</strong> and <strong>Get started</strong>. Name your Worker and choose <strong>Deploy</strong>.</li>
+              <li>Choose <strong>Edit code</strong>. Replace the starter code with the bundled <code>worker.js</code>, then deploy the updated code.<div class="network-actions network-setup-code-actions"><button id="network-proxy-copy-code" type="button" class="button secondary small">Copy worker.js</button><button id="network-proxy-download-code" type="button" class="button ghost small">Download worker.js</button></div></li>
+              <li>Use <strong>Generate password</strong> below, then copy it. In the Worker's <strong>Settings → Variables and Secrets</strong>, add <code>PROXY_TOKEN</code> as a <strong>Secret</strong> and paste that password. Add <code>ALLOWED_ORIGINS</code> as <strong>Text</strong> and paste this page's origin from below. Save and deploy the changes.</li>
+              <li>In <strong>Settings → Runtime</strong>, keep the current default compatibility date or choose <code>2024-11-11</code> or later. Normal public downloads need no extra compatibility flags, so skip flags that are not listed. The detailed guide below covers optional advanced settings.</li>
+              <li>Paste your Worker's HTTPS URL below, such as <code>https://my-proxy.my-account.workers.dev/</code>. The proxy password must match <code>PROXY_TOKEN</code>. Choose <strong>Use proxy</strong> to check your setup.</li>
+              <li>Enter a public data URL under <strong>Test a download</strong> and choose <strong>Test</strong>. After it succeeds, use <code>download.file()</code> or read the URL directly in R.</li>
+            </ol>
+            <p class="network-help"><a href="./cloudflare-worker/README.md" download="cloudflare-worker-setup.md">Download the detailed setup guide</a></p>
+          </details>
+          <label for="network-proxy-url">Worker HTTPS URL</label>
+          <div class="network-input-row"><input id="network-proxy-url" type="url" required placeholder="https://my-proxy.my-account.workers.dev/" autocomplete="off" spellcheck="false" aria-describedby="network-proxy-url-help"></div>
+          <p id="network-proxy-url-help" class="network-help">Use your Worker's root URL, with no data URL or password appended.</p>
+          <label for="network-proxy-token">Proxy password (<code>PROXY_TOKEN</code>)</label>
+          <div class="network-input-row"><input id="network-proxy-token" type="password" required minlength="32" maxlength="256" placeholder="Paste the password saved in PROXY_TOKEN" autocomplete="new-password" spellcheck="false" aria-describedby="network-proxy-token-help"></div>
+          <div class="network-actions network-token-actions"><button id="network-proxy-generate-token" type="button" class="button secondary small">Generate password</button><button id="network-proxy-copy-token" type="button" class="button ghost small" disabled>Copy password</button></div>
+          <p id="network-proxy-token-help" class="network-help">This is a shared password you generate for your proxy, not a Cloudflare API key. Paste the same value into the Worker's PROXY_TOKEN secret. The app keeps it only in memory for this connection.</p>
+          <label for="network-proxy-origin">This page's origin (<code>ALLOWED_ORIGINS</code>)</label>
+          <div class="network-input-row"><input id="network-proxy-origin" type="text" readonly spellcheck="false" aria-describedby="network-proxy-origin-help"><button id="network-proxy-copy-origin" type="button" class="button secondary" title="Copy this page's origin" aria-label="Copy this page's origin"><svg class="ui-icon" aria-hidden="true"><use href="#i-copy"></use></svg></button></div>
+          <p id="network-proxy-origin-help" class="network-help">Copy this exact origin into ALLOWED_ORIGINS. It includes the protocol and host, with no path or trailing slash.</p>
+          <p id="network-proxy-draft" class="network-help" hidden>Your setup fields have changed. Choose Use proxy to apply them before testing.</p>
+          <div class="network-actions"><button id="network-proxy-use" type="button" class="button primary">Use proxy</button></div>
+        </section>
+
+        <section class="network-section" aria-labelledby="network-test-heading">
+          <h3 id="network-test-heading">Test a download</h3>
+          <label for="network-test-url">HTTP or HTTPS data URL</label>
+          <div class="network-input-row"><input id="network-test-url" type="url" placeholder="https://example.org/data.csv" autocomplete="off" spellcheck="false" aria-describedby="network-test-help"><button id="network-test" type="button" class="button secondary" disabled>Test</button></div>
+          <p id="network-test-help" class="network-help">Connect the selected route to test a download. No project file is created.</p>
+          <output id="network-test-result" class="network-test-result" role="status" aria-live="polite" hidden></output>
+          <div id="network-dns-recovery" class="network-dns-recovery" hidden>
+            <button id="network-retry-dns" type="button" class="button secondary" aria-describedby="network-dns-recovery-help">Use Cloudflare DNS and retry</button>
+            <p id="network-dns-recovery-help" class="network-help">Sends public hostname DNS queries to Cloudflare through the exit node and retries this test URL.</p>
+          </div>
+        </section>
+        <section id="network-tailscale-diagnostics" class="network-section" aria-labelledby="network-diagnostic-heading" hidden>
+          <div class="network-diagnostic-actions"><h3 id="network-diagnostic-heading">Connection checks</h3><button id="network-diagnose" type="button" class="button secondary" aria-describedby="network-diagnostic-help" disabled>Diagnose connection</button></div>
+          <p id="network-diagnostic-help" class="network-help">Tests the selected exit node and HTTPS to 1.1.1.1 without DNS. Takes about 30 seconds and does not change settings.</p>
+          <div id="network-diagnostics" class="network-diagnostics" aria-busy="false" hidden>
+            <p id="network-diagnostic-status" class="network-diagnostic-summary" role="status" aria-live="polite" aria-atomic="true"></p>
+            <p id="network-diagnostic-exit" class="network-help"></p>
+            <ol id="network-diagnostic-checks" class="network-diagnostic-checks" aria-label="Connection check results"></ol>
+            <button id="network-copy-diagnostic" type="button" class="button secondary" hidden>Copy report</button>
+          </div>
+        </section>
+        <p class="network-privacy">Passwords and connection credentials stay in this tab's memory. Disconnecting, changing routes, or reloading clears them. R uses the selected route without automatically falling back to another provider.</p>
+      </div>
+      <div class="dialog-footer"><button class="button secondary" value="cancel">Done</button></div>
+    </form>
+  </dialog>
+
   <dialog id="gist-export-dialog" class="dialog medium-dialog">
     <form method="dialog" class="dialog-frame">
       <header class="dialog-header"><div><h2>Publish to GitHub Gist</h2><p>Select text files to include.</p></div><button class="icon-button" value="cancel" aria-label="Close"><svg class="ui-icon"><use href="#i-x"></use></svg></button></header>
@@ -524,6 +630,6 @@
     </article>
   </template>
 
-  <script type="module" src="js/app.js?v=1.2.12"></script>
+  <script type="module" src="js/app.js?v=1.5.4"></script>
 </body>
 </html>

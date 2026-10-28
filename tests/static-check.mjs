@@ -215,12 +215,13 @@ assert.match(engineSource, /cancelled:\s*true[\s\S]*Execution stopped\./, 'An ex
 assert.match(appSource, /if \(result\.cancelled\) return result;/, 'Cancelled console runs must skip post-run R queries while the worker restarts.');
 assert.match(appSource, /if \(result\.cancelled\) return;/, 'Cancelled R Markdown chunks must stop rendering without querying the replacement worker.');
 assert.match(appSource, /runtimeReadyLabel\(\)[\s\S]*R ready · R/, 'The ready status must include the active R version.');
-for (const id of ['panel-files', 'runtime-files-path', 'runtime-files-up', 'runtime-files-home', 'runtime-files-refresh', 'runtime-files-list']) {
-  assert.match(html, new RegExp(`id="${id}"`), `Runtime filesystem UI is missing ${id}.`);
+for (const id of ['file-tree', 'runtime-files-path', 'runtime-files-up', 'runtime-files-home', 'runtime-files-refresh', 'sidebar-delete-files', 'explorer-file-status']) {
+  assert.match(html, new RegExp(`id="${id}"`), `Unified Explorer UI is missing ${id}.`);
 }
+assert.doesNotMatch(html, /data-panel="files"|id="panel-files"|id="runtime-files-list"/, 'Files must have a single browser in the Explorer.');
 assert.match(engineSource, /async listVirtualFiles\(directory = '\/project'\)/, 'The runtime must expose directory listings for generated files.');
 assert.match(engineSource, /async readVirtualFile\(path\)[\s\S]*FS\.readFile/, 'Runtime files must be downloaded directly from webR FS bytes.');
-assert.match(appSource, /async downloadRuntimeFile\(entry\)[\s\S]*downloadBlob/, 'The Files panel must download generated files through the browser.');
+assert.match(appSource, /async explorerFileContent\(path\)[\s\S]*readVirtualFile/, 'The Explorer must read generated files from the R filesystem.');
 assert.match(engineSource, /async evaluateInline\(code\)/, 'The runtime must provide scalar inline-R evaluation.');
 assert.match(appSource, /inlinePreviewAssets/, 'Document export must inline preview assets.');
 assert.match(engineSource, /e\$View <- function/, 'The R runtime must install the IDE View() helper.');
@@ -273,7 +274,7 @@ if (existsSync(join(root, stressScriptPath))) {
 
 const allText = walk(root)
   .filter(path => !path.includes(`${join(root, '.git')}`))
-  .filter(path => !/\.(png|jpg|jpeg|webp|ico|zip)$/i.test(path))
+  .filter(path => !/\.(png|jpg|jpeg|webp|ico|zip|wasm|tgz)$/i.test(path))
   .map(path => readFileSync(path, 'utf8'))
   .join('\n');
 assert.ok(!allText.includes('\u2014'), 'Use spaced en dashes rather than em dashes in project text.');

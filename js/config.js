@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.2.12';
+export const APP_VERSION = '1.5.4';
 export const WEBR_VERSION = '0.6.0';
 export const WEBR_VERSION_SUGGESTIONS = Object.freeze([
   'latest', '0.6.0', '0.5.9', '0.5.8', '0.5.7', '0.5.6'
@@ -61,7 +61,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   dockRatio: 51,
   activeSidebar: 'explorer',
   dockPanels: {
-    top: ['environment', 'files', 'outline', 'packages'],
+    top: ['environment', 'outline', 'packages'],
     bottom: ['plots', 'help', 'data', 'preview']
   },
   activeDock: { top: 'environment', bottom: 'plots' },

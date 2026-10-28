@@ -1,9 +1,11 @@
 import {
   aceModeFromPath, basename, currentRExpression, debounce, escapeHtml,
   expressionState, extname, smartIndentR, stripRCommentsAndStrings
-} from './utils.js?v=1.2.12';
+} from './utils.js?v=1.5.4';
 
 const ACE_CDN = 'https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict';
+const ACE_MODULE_TIMEOUT_MS = 30_000;
+const configuredAceLoaders = new WeakSet();
 const R_MARKDOWN_MODE_ID = 'ace/mode/webr_rmarkdown';
 const R_MARKDOWN_RULES_ID = 'ace/mode/webr_rmarkdown_highlight_rules';
 
@@ -99,15 +101,70 @@ function existingAceModule(ace, id) {
   }
 }
 
-function loadAceModule(ace, id) {
+export function configureAceScriptLoader(ace, {
+  document: scriptDocument = globalThis.document,
+  timeoutMs = ACE_MODULE_TIMEOUT_MS
+} = {}) {
+  const net = existingAceModule(ace, 'ace/lib/net');
+  if (!net || typeof net.loadScript !== 'function' || !scriptDocument?.createElement) return false;
+  if (configuredAceLoaders.has(net)) return true;
+
+  // Ace 1.44 exposes no crossOrigin option for its script loader. Its default
+  // no-cors requests can be blocked by this app's COEP policy, and its loader
+  // does not notify callers on failure. Keep Ace's module registration path,
+  // but make all dynamically loaded modes, themes and extensions CORS-aware.
+  net.loadScript = (path, callback) => {
+    const script = scriptDocument.createElement('script');
+    let settled = false;
+    let timer;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      script.onload = script.onerror = script.onreadystatechange = null;
+      script.remove?.();
+      callback?.(error);
+    };
+    script.crossOrigin = 'anonymous';
+    script.async = true;
+    const configuredNonce = ['cspNonce', 'nonce'].map(key => {
+      try { return ace.config?.get?.(key); } catch { return null; }
+    }).find(Boolean);
+    const nonce = configuredNonce || scriptDocument.querySelector?.('script[nonce]')?.nonce;
+    if (nonce) script.nonce = nonce;
+    script.onload = () => finish();
+    script.onerror = () => finish(new Error(`Ace script could not be loaded: ${path}`));
+    script.onreadystatechange = () => {
+      if (script.readyState === 'loaded' || script.readyState === 'complete') finish();
+    };
+    timer = setTimeout(() => finish(new Error(`Ace script load timed out: ${path}`)), timeoutMs);
+    try {
+      // Set CORS and nonce before assigning the URL or inserting the element.
+      script.src = path;
+      (scriptDocument.head || scriptDocument.documentElement).appendChild(script);
+    } catch (error) { finish(error); }
+  };
+  configuredAceLoaders.add(net);
+  return true;
+}
+
+export function loadAceModule(ace, id, { timeoutMs = ACE_MODULE_TIMEOUT_MS } = {}) {
   const existing = existingAceModule(ace, id);
   if (existing) return Promise.resolve(existing);
   return new Promise((resolve, reject) => {
-    ace.config.loadModule(id, loaded => {
+    let settled = false;
+    const finish = (error, module) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(module);
+    };
+    const timer = setTimeout(() => finish(new Error(`Ace module load timed out: ${id}`)), timeoutMs);
+    try { ace.config.loadModule(id, loaded => {
       const module = loaded || existingAceModule(ace, id);
-      if (module) resolve(module);
-      else reject(new Error(`Ace module could not be loaded: ${id}`));
-    });
+      finish(module ? null : new Error(`Ace module could not be loaded: ${id}`), module);
+    }); } catch (error) { finish(error); }
   });
 }
 
@@ -456,6 +513,7 @@ export class EditorManager extends EventTarget {
       this.ace.config.set('modePath', ACE_CDN);
       this.ace.config.set('themePath', ACE_CDN);
       this.ace.config.set('workerPath', ACE_CDN);
+      configureAceScriptLoader(this.ace);
       defineCrimsonTheme(this.ace);
       await defineRMarkdownMode(this.ace);
       await loadAceModule(this.ace, 'ace/ext/language_tools');
@@ -1187,7 +1245,8 @@ export class EditorManager extends EventTarget {
     try {
       const ace = globalThis.ace;
       ace.config.set('basePath', ACE_CDN);
-      const highlighter = await new Promise(resolve => ace.config.loadModule('ace/ext/static_highlight', resolve));
+      configureAceScriptLoader(ace);
+      const highlighter = await loadAceModule(ace, 'ace/ext/static_highlight');
       const highlighted = await new Promise((resolve, reject) => {
         try {
           highlighter.render(
