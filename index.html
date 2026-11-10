@@ -12,8 +12,8 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preconnect" href="https://webr.r-wasm.org" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=1.5.4">
-  <script src="coi-serviceworker.js?v=1.5.4"></script>
+  <link rel="stylesheet" href="styles.css?v=1.6.0">
+  <script src="coi-serviceworker.js?v=1.6.0"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict/ace.js"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/dompurify@3.2.7/dist/purify.min.js"></script>
@@ -237,6 +237,7 @@
           <div class="pane-tabs-row">
             <div id="editor-tabs" class="tabs scrollable" role="tablist"></div>
             <div class="pane-actions">
+              <button id="assistant-editor-suggest" class="mini-icon" type="button" title="Suggest R code locally (Alt+\)" aria-label="Suggest R code locally"><svg class="ui-icon"><use href="#i-sparkles"></use></svg></button>
               <button id="preview-active-button" class="button secondary compact document-render-button" title="Render Markdown or R Markdown" hidden><svg class="ui-icon"><use href="#i-book"></use></svg><span>Render</span></button>
               <button class="mini-icon pane-maximize-button" data-maximize-pane="editor-pane" title="Maximize Editor pane" aria-label="Maximize Editor pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button>
               <button id="editor-more-button" class="mini-icon menu-trigger" type="button" title="Editor actions" aria-haspopup="menu" aria-expanded="false"><svg class="ui-icon"><use href="#i-more"></use></svg></button>
@@ -276,6 +277,7 @@
               <button class="tab" data-console-view="jobs"><span>Background</span><span class="badge count">0</span></button>
             </div>
             <div class="pane-actions">
+              <button id="assistant-console-suggest" class="mini-icon" type="button" title="Suggest console code locally (Alt+\)" aria-label="Suggest console code locally"><svg class="ui-icon"><use href="#i-sparkles"></use></svg></button>
               <button id="clear-console-button" class="mini-icon" title="Clear console"><svg class="ui-icon"><use href="#i-trash"></use></svg></button>
               <button id="console-popout-button" class="mini-icon pane-maximize-button" data-maximize-pane="console-pane" title="Maximize Console pane" aria-label="Maximize Console pane" aria-pressed="false"><svg class="ui-icon"><use href="#i-maximize"></use></svg></button>
             </div>
@@ -306,6 +308,7 @@
               <button class="tab active" draggable="true" data-panel="environment">Environment</button>
               <button class="tab" draggable="true" data-panel="outline">Outline</button>
               <button class="tab" draggable="true" data-panel="packages">Packages</button>
+              <button class="tab" draggable="true" data-panel="assistant">Assistant</button>
             </div>
             <div class="pane-actions">
               <button id="refresh-active-panel" class="mini-icon" title="Refresh active panel"><svg class="ui-icon"><use href="#i-refresh"></use></svg></button>
@@ -331,6 +334,51 @@
                 <button id="install-package-button" class="button primary compact"><svg class="ui-icon"><use href="#i-plus"></use></svg><span>Install</span></button>
               </div>
               <div id="packages-table" class="packages-table empty-state"><svg class="ui-icon"><use href="#i-box"></use></svg><p>Package library will appear after R starts.</p></div>
+            </section>
+            <section id="panel-assistant" class="panel-view assistant-panel" data-panel-view="assistant" aria-label="Local R assistant">
+              <div class="assistant-scroll">
+                <details id="assistant-model-details" class="assistant-settings" open>
+                  <summary><strong>Local R assistant</strong><span class="assistant-badge">WebLLM</span></summary>
+                  <p class="field-help">The model runs on this device. Load once to download its weights; cached weights can be reused. Requires WebGPU and HTTPS or localhost.</p>
+                  <label for="assistant-model">Coding model</label>
+                  <select id="assistant-model"><option value="">Open the Assistant to choose a model</option></select>
+                  <div class="assistant-actions">
+                    <button id="assistant-load" type="button" class="button primary compact">Load model</button>
+                    <button id="assistant-unload" type="button" class="button secondary compact" disabled>Unload</button>
+                  </div>
+                  <p class="field-help">Uses GPU memory while loaded. Unloads after 5 idle minutes. The browser may evict cached downloads.</p>
+                </details>
+                <p id="assistant-status" class="assistant-status" role="status" aria-live="polite">Open this pane to set up local assistance. No model is loaded.</p>
+                <progress id="assistant-progress" max="1" value="0" aria-label="Model loading progress" hidden></progress>
+                <details id="assistant-context-details" class="assistant-settings">
+                  <summary>R context and privacy</summary>
+                  <label class="checkbox-row"><input id="assistant-use-objects" type="checkbox" checked><span>Use R object metadata</span></label>
+                  <label for="assistant-objects">Objects for detail (up to 6)</label>
+                  <select id="assistant-objects" multiple size="3" aria-describedby="assistant-objects-help"></select>
+                  <p id="assistant-objects-help" class="field-help">Ctrl+click to select. With none selected, objects named in your request or code are inspected. Metadata is capped; full datasets are never copied.</p>
+                  <label class="checkbox-row"><input id="assistant-values" type="checkbox"><span>Include a tiny data sample (up to 3 rows)</span></label>
+                  <label class="checkbox-row"><input id="assistant-functions" type="checkbox"><span>Include selected function bodies (bounded)</span></label>
+                  <label class="checkbox-row"><input id="assistant-source" type="checkbox" checked><span>Include nearby editor or console code</span></label>
+                  <label class="checkbox-row"><input id="assistant-output" type="checkbox"><span>Include last R result (bounded)</span></label>
+                  <p class="field-help">Context goes to the local model, with no chat API or API key. Model assets are fetched from jsDelivr, Hugging Face and MLC. Chat and context are not saved with your workspace. Inspecting a delayed R binding can evaluate its promise.</p>
+                  <button id="assistant-refresh-context" type="button" class="button secondary compact">Preview context</button>
+                  <pre id="assistant-context-preview" class="assistant-context-preview" tabindex="0">No request yet. Only bounded context will be included.</pre>
+                </details>
+                <div id="assistant-messages" class="assistant-messages" aria-label="Assistant conversation">
+                  <p class="assistant-empty">Ask about your R objects, explain an error, or request code. Use the sparkle button in the editor or console for a suggestion at the cursor. Review generated code before running it.</p>
+                </div>
+              </div>
+              <form id="assistant-form" class="assistant-composer">
+                <label class="sr-only" for="assistant-prompt">Ask the local R assistant</label>
+                <textarea id="assistant-prompt" rows="2" maxlength="1200" placeholder="Ask about your data or R code…" aria-describedby="assistant-key-hint"></textarea>
+                <div class="assistant-actions">
+                  <button id="assistant-send" type="submit" class="button primary compact" disabled>Ask</button>
+                  <button id="assistant-suggest" type="button" class="button secondary compact" disabled>Suggest</button>
+                  <button id="assistant-stop" type="button" class="button secondary compact" disabled>Stop</button>
+                  <button id="assistant-clear" type="button" class="button ghost compact">Clear chat</button>
+                </div>
+                <span id="assistant-key-hint" class="field-help">Ctrl+Enter to ask · Alt+\ to suggest at the cursor</span>
+              </form>
             </section>
           </div>
         </section>
@@ -486,6 +534,7 @@
               <div><span>Source active script</span><kbd>Ctrl Shift Enter</kbd></div>
               <div><span>Insert pipe</span><kbd>Ctrl Shift M</kbd></div>
               <div><span>Smart indent</span><kbd>Ctrl I</kbd></div>
+              <div><span>Local AI suggestion</span><kbd>Alt \</kbd></div>
               <div><span>Function help</span><kbd>F1</kbd></div>
               <div><span>Jump to definition</span><kbd>F12</kbd></div>
               <div><span>Advanced find and replace</span><kbd>Ctrl F</kbd></div>
@@ -630,6 +679,6 @@
     </article>
   </template>
 
-  <script type="module" src="js/app.js?v=1.5.4"></script>
+  <script type="module" src="js/app.js?v=1.6.0"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 import {
   WEBR_VERSION, normalizeWebRVersion, webRBaseUrl, webRModuleUrl
-} from './config.js?v=1.5.4';
-import { rString, rVector, rName, normalizePath, dirname, formatBytes } from './utils.js?v=1.5.4';
+} from './config.js?v=1.6.0';
+import { rString, rVector, rName, normalizePath, dirname, formatBytes } from './utils.js?v=1.6.0';
 
 const MARKER_LINE = /^<<WEBRSTUDIO:(MESSAGE|WARNING|ERROR|INFO|VIEW|ECHO)>>(.*)$/;
 const RUNTIME_CANCELLATION = 'WebRRuntimeCancellation';
@@ -1817,6 +1817,184 @@ local({
   async removeObject(name) {
     this.assertIdle('Object removal');
     await this.webR.evalRVoid(`if (exists(${rString(name)}, envir = .GlobalEnv, inherits = FALSE)) rm(list = ${rString(name)}, envir = .GlobalEnv)`);
+  }
+
+  /**
+   * A small, on-demand snapshot for the local assistant. Names are exact global
+   * bindings, never R expressions. Sampling and function bodies are opt-in.
+   * Active bindings and custom display methods are not invoked. Reading an
+   * ordinary delayed binding with get() can still force its promise in R;
+   * callers should collect this only after an explicit user request, not while
+   * typing, and should prefer their cached inventory for automatic completion.
+   */
+  async getAssistantContext({
+    names = [], includeValues = false, includeFunctionBodies = false,
+    maxObjects = 24, maxColumns = 12, maxRows = 3, maxChars = 12000
+  } = {}) {
+    this.assertIdle('Assistant context');
+    if (!Array.isArray(names) || names.some(name => typeof name !== 'string' || !name || name.length > 512 || name.includes('\0'))) {
+      throw new Error('Assistant context accepts an array of exact R object names (1 to 512 characters).');
+    }
+    const limit = (value, fallback, min, max) => Number.isFinite(Number(value))
+      ? Math.min(max, Math.max(min, Math.floor(Number(value)))) : fallback;
+    const objectLimit = limit(maxObjects, 24, 1, 40);
+    const columnLimit = limit(maxColumns, 12, 1, 16);
+    const rowLimit = limit(maxRows, 3, 0, 5);
+    const charLimit = limit(maxChars, 12000, 512, 16000);
+    const uniqueNames = [...new Set(names)];
+    const selected = uniqueNames.slice(0, objectLimit);
+    const runtime = this.webR;
+    const generation = this.generation;
+    // Run the helper in an isolated lexical environment. A global object named
+    // get, length, format, or lapply must not replace the base helper functions.
+    const records = await runtime.evalRRaw(`base::eval(base::quote({
+      sep <- intToUtf8(31L)
+      enc <- function(x) utils::URLencode(enc2utf8(x), reserved = TRUE)
+      cut <- function(x, n = 240L) substr(x, 1L, n)
+      labels <- function(x, count = ${columnLimit}L) {
+        if (typeof(x) != "character" || is.object(x)) return(character())
+        cut(.subset(x, seq_len(min(length(x), count))))
+      }
+      class_label <- function(x) {
+        out <- labels(attr(x, "class", exact = TRUE), 6L)
+        if (length(out)) paste(out, collapse = ", ") else typeof(x)
+      }
+      dimension_label <- function(x) {
+        d <- attr(x, "dim", exact = TRUE)
+        if (typeof(d) %in% c("integer", "double") && !is.object(d)) {
+          return(paste(.subset(d, seq_len(min(4L, length(d)))), collapse = " x "))
+        }
+        if (!is.object(x) && typeof(x) %in% c("NULL", "logical", "integer", "double", "complex", "character", "raw", "list")) {
+          return(paste("length", length(x)))
+        }
+        ""
+      }
+      sample_values <- function(x) {
+        if (!${includeValues === true ? 'TRUE' : 'FALSE'} || ${rowLimit}L == 0L) return("")
+        if (isS4(x) || !typeof(x) %in% c("logical", "integer", "double", "complex", "character", "raw")) return("")
+        # .subset2 bypasses user-defined [[ methods and returns a bare scalar.
+        # Probe at most a few positions instead of dispatching length(x),
+        # copying the entire vector with unclass(), or padding a short vector.
+        # These are storage values (e.g. factor codes, Date days).
+        cells <- lapply(seq_len(${rowLimit}L), function(i) tryCatch(.subset2(x, i), error = function(e) NULL))
+        value <- unlist(cells, use.names = FALSE)
+        if (typeof(value) == "character") value <- cut(value, 120L)
+        text <- as.character(value)
+        text[is.na(text)] <- "NA"
+        paste(cut(text, 120L), collapse = ", ")
+      }
+      bounded_code <- function(expr) {
+        # Refuse large literals / deep syntax before deparsing. nlines alone
+        # does not bound a long literal or an enormous single-line expression.
+        nodes <- 0L
+        visit <- function(x, depth = 0L) {
+          nodes <<- nodes + 1L
+          if (nodes > 120L || depth > 10L || isS4(x) || is.object(x)) stop("large expression")
+          kind <- typeof(x)
+          if (kind %in% c("language", "pairlist", "expression", "list")) {
+            count <- length(x)
+            if (count > 24L) stop("large expression")
+            invisible(lapply(seq_len(count), function(i) visit(x[[i]], depth + 1L)))
+          } else if (kind == "symbol") {
+            if (nchar(cut(as.character(x), 161L), type = "chars") > 160L) stop("large name")
+          } else if (kind %in% c("NULL", "logical", "integer", "double", "complex", "character", "raw")) {
+            if (length(x) > 8L) stop("large literal")
+            if (kind == "character" && any(nchar(cut(x, 161L), type = "chars", allowNA = TRUE) > 160L, na.rm = TRUE)) stop("large literal")
+          } else stop("unsupported expression")
+          invisible(NULL)
+        }
+        tryCatch({
+          visit(expr)
+          cut(paste(deparse(expr, width.cutoff = 80L, nlines = 12L,
+            control = c("keepNA", "keepInteger", "niceNames")), collapse = "\\n"), 1600L)
+        }, error = function(e) "<body omitted: large or unsupported syntax>")
+      }
+      requested <- ${rVector(selected)}
+      pool <- if (length(requested)) requested else ls(envir = globalenv(), all.names = FALSE, sorted = FALSE)
+      pool <- pool[pool != ".webrStudio" & !startsWith(pool, ".__webRStudio_")]
+      truncated <- length(pool) > ${objectLimit}L
+      pool <- .subset(pool, seq_len(min(length(pool), ${objectLimit}L)))
+      used <- 0L
+      inspect <- function(name) {
+        if (used >= ${charLimit}L) { truncated <<- TRUE; return(character()) }
+        fields <- tryCatch({
+          if (!exists(name, envir = globalenv(), inherits = FALSE)) {
+            c(name, "missing", "", "", "Object is no longer in the global environment.")
+          } else if (bindingIsActive(name, globalenv())) {
+            c(name, "active binding", "", "", "Skipped: inspecting this binding would run R code.")
+          } else {
+            object <- get(name, envir = globalenv(), inherits = FALSE)
+            kind <- typeof(object)
+            classes <- class_label(object)
+            dimensions <- dimension_label(object)
+            details <- ""
+            if (isS4(object)) {
+              details <- "S4 contents omitted."
+            } else if (kind == "closure") {
+              arguments <- names(formals(object))
+              shown <- labels(arguments, 24L)
+              details <- paste0("function(", paste(shown, collapse = ", "),
+                if (length(arguments) > 24L) ", ..." else "", "); defaults omitted")
+              if (${includeFunctionBodies === true ? 'TRUE' : 'FALSE'}) details <- paste(details, bounded_code(body(object)), sep = "\\n")
+            } else if (kind == "list") {
+              object_names <- attr(object, "names", exact = TRUE)
+              shown <- labels(object_names)
+              is_table <- "data.frame" %in% labels(attr(object, "class", exact = TRUE), 6L) &&
+                typeof(object_names) == "character" && !is.object(object_names)
+              if (is_table) {
+                # .row_names_info and .subset2 avoid custom data-frame methods.
+                dimensions <- paste(.row_names_info(object, 2L), "rows x", length(object_names), "columns")
+                columns <- vapply(seq_along(shown), function(index) {
+                  column <- .subset2(object, index)
+                  preview <- sample_values(column)
+                  paste0(shown[index], ": ", class_label(column),
+                    if (nzchar(preview)) paste0("; storage sample: ", preview) else "")
+                }, character(1))
+                details <- paste(columns, collapse = "\\n")
+              } else {
+                details <- if (length(shown)) paste("Named elements:", paste(shown, collapse = ", ")) else "List contents omitted."
+              }
+              if (typeof(object_names) == "character" && !is.object(object_names) && length(object_names) > ${columnLimit}L) {
+                details <- paste(details, "Additional columns/elements omitted.", sep = "\\n")
+                truncated <<- TRUE
+              }
+            } else if (kind %in% c("environment", "externalptr", "weakref", "language", "pairlist", "expression")) {
+              details <- "Contents omitted."
+            } else {
+              preview <- sample_values(object)
+              if (nzchar(preview)) details <- paste("Storage sample:", preview)
+            }
+            c(name, kind, classes, dimensions, details)
+          }
+        }, error = function(e) c(name, "unavailable", "", "", "Inspection unavailable."))
+        fields <- vapply(fields, cut, character(1), n = min(2400L, ${charLimit}L))
+        size <- sum(nchar(fields, type = "chars")) + 24L
+        if (used + size > ${charLimit}L) truncated <<- TRUE
+        used <<- used + size
+        paste(vapply(fields, enc, character(1)), collapse = sep)
+      }
+      result <- unlist(lapply(pool, inspect), use.names = FALSE)
+      c(paste("META", truncated, sep = sep), result)
+    }), envir = base::new.env(parent = base::baseenv()))`, 'string[]', { captureStreams: false });
+    if (runtime !== this.webR || generation !== this.generation || !this.ready) {
+      throw runtimeCancellationError('The webR runtime changed while collecting assistant context. Request a fresh snapshot.');
+    }
+    const parsed = parseDelimitedRecords(records.slice(0, objectLimit + 1));
+    let truncated = parsed[0]?.[1] === 'TRUE' || uniqueNames.length > selected.length;
+    const objects = [];
+    let text = '';
+    for (const fields of parsed.slice(1)) {
+      if (text.length >= charLimit) { truncated = true; break; }
+      const [name = '', type = '', className = '', dimensions = '', rawDetails = ''] = fields;
+      const heading = `${name.slice(0, 512)}: ${className.slice(0, 240) || type.slice(0, 80)}${dimensions ? ` (${dimensions.slice(0, 120)})` : ''}`;
+      const remaining = Math.max(0, charLimit - text.length - heading.length - 2);
+      const details = rawDetails.slice(0, Math.min(2400, remaining));
+      const line = `${heading}${details ? `\n${details}` : ''}\n`;
+      if (line.length > charLimit - text.length || details.length < rawDetails.length) truncated = true;
+      objects.push({ name: name.slice(0, 512), type: type.slice(0, 80), className: className.slice(0, 240), dimensions: dimensions.slice(0, 120), details });
+      text += line.slice(0, charLimit - text.length);
+    }
+    return { text: text.trimEnd(), objects, truncated, generation };
   }
 
   async clearEnvironment() {

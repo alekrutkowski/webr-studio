@@ -2,8 +2,8 @@ import {
   NETWORK_TIMEOUT_MS, NETWORK_AUTH_TIMEOUT_MS, NETWORK_DIAGNOSTIC_TIMEOUT_MS, validateDownloadUrl, validateLoginUrl,
   validateDNSMode, validateNetworkMode, networkErrorCode, normalizeNetworkHeaders, normalizeNetworkSnapshot,
   describeNetworkConnection, describeNetworkError, normalizeNetworkDiagnostics
-} from './network-common.js?v=1.5.4';
-import { CloudflareProxyClient } from './cloudflare-proxy.js?v=1.5.4';
+} from './network-common.js?v=1.6.0';
+import { CloudflareProxyClient } from './cloudflare-proxy.js?v=1.6.0';
 
 /** A per-tab, explicit download route. The Go/Wasm client only loads on Connect. */
 export class TailscaleNetwork extends EventTarget {
@@ -11,7 +11,7 @@ export class TailscaleNetwork extends EventTarget {
   #browserRequests = new Set();
 
   constructor({
-    workerFactory = () => new Worker(new URL('./tailscale-worker.js?v=1.5.4', import.meta.url), {
+    workerFactory = () => new Worker(new URL('./tailscale-worker.js?v=1.6.0', import.meta.url), {
       type: 'module', name: 'webR Studio Tailscale'
     }),
     fetcher = (...args) => globalThis.fetch(...args),

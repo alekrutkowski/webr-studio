@@ -1,5 +1,5 @@
-import { describeNetworkError, networkErrorCode } from './network-common.js?v=1.5.4';
-import { APP_VERSION } from './config.js?v=1.5.4';
+import { describeNetworkError, networkErrorCode } from './network-common.js?v=1.6.0';
+import { APP_VERSION } from './config.js?v=1.6.0';
 
 /** The networking panel deliberately keeps all account and network data as text. */
 function loginLink(value) {

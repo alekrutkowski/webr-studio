@@ -1,6 +1,6 @@
 {
   "name": "webr-studio",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "private": true,
   "description": "A fast, browser-native R IDE powered by webR.",
   "license": "MIT",
@@ -9,7 +9,7 @@
     "serve": "python3 serve.py",
     "build:network": "node scripts/build-tailscale.mjs",
     "test:network-runtime": "node scripts/test-network-runtime.mjs",
-    "test": "node tests/static-check.mjs && node tests/unit-check.mjs && node tests/file-content-check.mjs && node tests/engine-files-check.mjs && node tests/network-check.mjs && node tests/network-bridge-check.mjs && node tests/cloudflare-worker-check.mjs && node tests/cloudflare-proxy-check.mjs && node tests/ace-loader-check.mjs",
+    "test": "node tests/static-check.mjs && node tests/unit-check.mjs && node tests/file-content-check.mjs && node tests/engine-files-check.mjs && node tests/network-check.mjs && node tests/network-bridge-check.mjs && node tests/cloudflare-worker-check.mjs && node tests/cloudflare-proxy-check.mjs && node tests/ace-loader-check.mjs && node tests/assistant-context-check.mjs && node tests/assistant-client-check.mjs && node tests/assistant-feature-check.mjs && node tests/assistant-ui-check.mjs",
     "test:browser": "node tests/browser-network-check.mjs",
     "test:browser-dns": "node tests/browser-dns-recovery-check.mjs",
     "test:browser-diagnostics": "node tests/browser-network-diagnostic-check.mjs",
@@ -20,7 +20,10 @@
     "test:browser-install": "node tests/browser-package-install-check.mjs",
     "test:browser-input": "node tests/browser-console-input-check.mjs",
     "test:browser-open": "node tests/browser-file-open-check.mjs",
-    "test:browser-persistence": "node tests/browser-project-persistence-check.mjs"
+    "test:browser-persistence": "node tests/browser-project-persistence-check.mjs",
+    "test:assistant": "node tests/assistant-context-check.mjs && node tests/assistant-client-check.mjs && node tests/assistant-feature-check.mjs && node tests/assistant-ui-check.mjs",
+    "test:assistant-webr": "node tests/assistant-webr-check.mjs",
+    "test:browser-assistant": "node tests/browser-assistant-check.mjs"
   },
   "type": "module"
 }

@@ -1,5 +1,32 @@
 # Changes
 
+## 1.6.0
+
+- Add an optional local R assistant powered by pinned WebLLM 0.2.87 and Qwen2.5
+  Coder 0.5B or 1.5B q4f32. Load the assistant UI on demand and import WebLLM
+  inside a dedicated worker only after **Load model**.
+- Add streamed chat and explicit **Alt+\** suggestions in the R editor and
+  console. Review proposals before insertion, appending to the console draft,
+  or running a visible R code block through the normal execution path.
+- Collect bounded metadata from relevant or selected live R objects while R
+  is idle. Make small data samples, function bodies, and the last execution
+  result separately controllable, and expose the exact prompt in a context
+  preview. Avoid active bindings and custom display methods during inspection.
+- Preserve ordinary completion without a model. Bound context and generation,
+  batch streamed updates, stop generation when R starts, terminate a stalled
+  interruption after 2.5 seconds, and unload after five idle minutes.
+- Reject stale suggestion insertion after document, selection, cursor, or R
+  session changes. Keep model output as displayed text and proposals, with no
+  autonomous tool calls or implicit code execution.
+- Keep assistant chat in page memory, provide **Clear chat** and **Unload**,
+  and document model downloads, cache behaviour, memory estimates, and WebGPU
+  requirements in `ASSISTANT.md`.
+- Add deterministic lifecycle, context, and UI tests plus an optional real-webR
+  Node check of the inspection bridge. Include a browser regression with a
+  deterministic model and an opt-in real WebGPU smoke test; document the
+  target-device verification still needed without claiming measured inference
+  performance.
+
 ## 1.5.4
 
 - Make **Open** use content-based text detection instead of a filename extension

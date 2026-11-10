@@ -1,7 +1,7 @@
 import {
   aceModeFromPath, basename, currentRExpression, debounce, escapeHtml,
   expressionState, extname, smartIndentR, stripRCommentsAndStrings
-} from './utils.js?v=1.5.4';
+} from './utils.js?v=1.6.0';
 
 const ACE_CDN = 'https://cdn.jsdelivr.net/npm/ace-builds@1.44.0/src-min-noconflict';
 const ACE_MODULE_TIMEOUT_MS = 30_000;
@@ -574,6 +574,7 @@ export class EditorManager extends EventTarget {
   }
 
   bindFallbackEvents() {
+    this.fallback.addEventListener('focus', () => this.callbacks.onFocus?.('editor'));
     this.fallback.addEventListener('input', () => {
       if (!this.activePath) return;
       const file = this.files.get(this.activePath);
@@ -604,6 +605,7 @@ export class EditorManager extends EventTarget {
   registerCommands() {
     const commands = [
       { name: 'runSelection', bindKey: { win: 'Ctrl-Enter', linux: 'Ctrl-Enter' }, exec: () => this.callbacks.onRunSelection?.(this.getRunText()) },
+      { name: 'suggestRCode', bindKey: { win: 'Alt-\\', linux: 'Alt-\\' }, exec: () => this.callbacks.onSuggest?.() },
       { name: 'runScript', bindKey: { win: 'Ctrl-Shift-Enter', linux: 'Ctrl-Shift-Enter' }, exec: () => this.callbacks.onRunScript?.(this.getValue()) },
       { name: 'insertPipe', bindKey: { win: 'Ctrl-Shift-M', linux: 'Ctrl-Shift-M' }, exec: () => this.insertPipe() },
       { name: 'smartIndent', bindKey: { win: 'Ctrl-I', linux: 'Ctrl-I' }, exec: () => this.smartIndent() },

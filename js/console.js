@@ -1,8 +1,8 @@
 import {
   debounce, escapeHtml, expressionState, formatDuration, mistralErrorUrl,
   safeOpen, copyText, smartIndentR
-} from './utils.js?v=1.5.4';
-import { acceptAceCompletionOrIndent, EditorManager } from './editor.js?v=1.5.4';
+} from './utils.js?v=1.6.0';
+import { acceptAceCompletionOrIndent, EditorManager } from './editor.js?v=1.6.0';
 
 const CONSOLE_KEYWORDS = [
   'if', 'else', 'for', 'while', 'repeat', 'function', 'return', 'next', 'break',
@@ -126,6 +126,7 @@ export class ConsoleManager extends EventTarget {
   }
 
   enableFallback(draft = '') {
+    this.fallback.addEventListener('focus', () => this.callbacks.onFocus?.('console'));
     this.fallbackMode = true;
     this.editor?.destroy?.();
     this.editor = null;
@@ -161,6 +162,7 @@ export class ConsoleManager extends EventTarget {
   }
 
   registerCommands() {
+    this.editor.commands.addCommand({ name: 'suggestRCode', bindKey: { win: 'Alt-\\', linux: 'Alt-\\' }, exec: () => this.callbacks.onSuggest?.() });
     this.editor.commands.addCommand({
       name: 'consoleEnter',
       bindKey: { win: 'Enter', linux: 'Enter' },

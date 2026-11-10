@@ -1,4 +1,4 @@
-import { basename, normalizePath } from './utils.js?v=1.5.4';
+import { basename, normalizePath } from './utils.js?v=1.6.0';
 
 const API_ROOT = 'https://api.github.com';
 

@@ -21,6 +21,7 @@ Made with GPT-5.6-Sol-Pro.
 - Multiline console expressions with continuation prompts and multiline command history.
 - Interactive R prompts accept plain-text replies in the console, including menu choices and empty responses, with Stop available while waiting.
 - Project-aware completion candidates from open files, the global environment, loaded packages, namespace expressions, and list or data-frame members.
+- Optional local R assistant with WebLLM, streamed chat, bounded access to R objects, and explicit **Alt+\** code suggestions in the editor and console. Model loading starts only when requested.
 - Smart indentation, Ctrl+I formatting, advanced find and replace, undo and redo buttons, Ctrl+Z and Ctrl+Y, jump to definition with F12, and help for the symbol under the cursor with F1.
 - Ctrl+Shift+M inserts either the native `|>` pipe or `%>%`, according to the saved preference.
 - Run selection or current expression with Ctrl+Enter, source the complete script with Ctrl+Shift+Enter, stop execution, restart webR, and optional execution timing.
@@ -52,7 +53,7 @@ Made with GPT-5.6-Sol-Pro.
 ### Workbench
 
 - Explorer, project search, snapshots, and Gist panels in the left activity bar.
-- Editor and console in the centre, with Environment, Outline, Packages, Plots, Help, Data, and Preview docks on the right.
+- Editor and console in the centre, with Environment, Outline, Packages, Plots, Help, Data, Preview, and Assistant docks on the right.
 - Resizable sidebar, editor and console split, right dock, and upper or lower right dock split.
 - Right-dock tabs can be dragged between the upper and lower panes.
 - Balanced, code-focus, console-focus, and data-focus layout presets, plus per-pane maximisation.
@@ -66,10 +67,44 @@ Made with GPT-5.6-Sol-Pro.
 - **Markdown:** Marked `18.0.7` from its UMD browser build.
 - **Math rendering:** KaTeX `0.18.1`, exported as self-contained MathML.
 - **HTML sanitisation:** DOMPurify `3.2.7`.
+- **Optional local inference:** WebLLM `0.2.87`, dynamically imported inside a dedicated worker after **Load model**. The UI offers Qwen2.5 Coder 0.5B and 1.5B q4f32 models with a 2,048-token context; no model is loaded during ordinary startup.
 - **Persistent browser state:** a local IndexedDB schema owned by the application. Every regular file under `/project`, together with empty directories, is backed up automatically after R operations and restored on startup. Runtime changes and deletions are reconciled while preserving unsaved editor changes. Files outside `/project` remain session files until explicitly copied into the project.
 - **Interrupt support on GitHub Pages:** `coi-serviceworker.js` adds cross-origin isolation headers to same-origin responses after the first controlled reload. When isolation is unavailable, the IDE remains usable through webR's fallback communication channel, with hard restart as the fallback stop mechanism.
 - **Build process:** none. The deployed files are ordinary HTML, CSS, JavaScript modules, and static assets.
 - **Optional networking:** the same private per-tab R download bridge can use a locally shipped Tailscale WebAssembly client or a Cloudflare Worker you deploy. Tailscale loads only after Connect and uses official Tailscale `v1.96.0` with Go `1.26.10`; source, build script, checksums, and notices are included. The Cloudflare Worker is a separate, dependency-free JavaScript file and requires no Tailscale runtime.
+
+## Use the local R assistant
+
+Open **Assistant**, select a coding model, and click **Load model**. WebGPU and
+HTTPS or localhost are required. The first load downloads assets from jsDelivr,
+Hugging Face and its storage hosts, and MLC's model-library repository. Prompts,
+selected R context, and responses stay on this device. Loading can reuse assets
+that the browser has retained in its cache.
+
+Ask about an object by name, or select up to six objects for detail. Metadata
+is enabled initially; data samples and function bodies are separate opt-ins.
+**Preview context** shows the bounded messages used for a request. Focus the
+editor or idle console and press **Alt+\** for a continuation at the cursor or
+a replacement for selected text. Suggestions do not run while typing.
+
+Review generated R code before choosing **Insert in editor**, **Add to console**,
+or **Run in R**. Adding code to the console appends it to the draft. Running a
+visible code block uses the ordinary R execution path and makes a bounded result
+available to the next question. A suggestion cannot insert into a document or
+cursor position that changed during generation.
+
+Inference runs in its own worker, uses short output budgets, stops when R starts
+executing, and unloads after five idle minutes. **Stop** and **Unload** are also
+available. The models still consume shared GPU and memory resources; speed is
+device-dependent. The two upstream catalog GPU-memory estimates are about
+1.06 GB and 1.89 GB at their default 4,096-token context, not measurements of
+this app's 2,048-token configuration or download sizes.
+
+Conversation history is kept only in page memory and can be cleared with
+**Clear chat**. The small local models provide code proposals and explanations;
+the integration has no autonomous tool loop and does not claim Claude Code or
+Codex capability. See [ASSISTANT.md](ASSISTANT.md) for exact models, context
+limits, privacy, lifecycle behaviour, validation, and a manual smoke test.
 
 ## Install R packages
 
@@ -326,6 +361,20 @@ npm test
 
 This runs structural checks plus unit tests for expression parsing, R Markdown chunk isolation, assignment-lint context, completion acceptance, editor-session stability, traceback cleanup, outline extraction, smart indentation, debounce cancellation, delimited data parsing, and the new networking routes, binary responses, headers, cancellation, error handling, per-tab isolation, and service-worker restart behavior.
 
+The assistant's deterministic tests cover worker lifecycle and cancellation,
+bounded context, explicit actions, and stale-insertion protection with simulated
+worker/R boundaries. `npm run test:assistant-webr` optionally exercises its R
+inspection bridge with real webR under Node. It needs `webr@0.6.0` installed, or
+`WEBR_MODULE` pointing to that package's `dist/webr.mjs`; it does not download a
+language model. These checks do not measure browser/GPU inference performance.
+
+`npm run test:browser-assistant` checks the real app, Ace, and webR in a browser
+with a deterministic model substitute. The optional
+`ASSISTANT_REAL_WEBGPU=1 BROWSER_HEADLESS=0 npm run test:browser-assistant`
+deliberately downloads the 0.5B model and tests real GPU generation without
+executing generated code. See [ASSISTANT.md](ASSISTANT.md) for setup and the
+validation limits.
+
 The optional browser regression suites run real webR against local fixtures. Install Playwright and its Chromium browser, then run `npm run test:browser`, `npm run test:browser-console`, `npm run test:browser-cloudflare`, and `npm run test:browser-files`. Tailscale tests use an explicitly simulated transport. The Cloudflare test runs the shipped Worker handler locally with a controlled upstream, and the file test exercises the real virtual filesystem, browser storage, and GUI. See [NETWORKING.md](NETWORKING.md) for details. Normal serving and deployment do not require npm installation or Go compilation.
 
 `npm run test:browser-install` checks R-side package installation, argument
@@ -379,9 +428,22 @@ The built-in renderer supports Markdown plus fenced R chunks and common chunk op
 
 Use a current Chromium, Firefox, or Edge release. Service workers require HTTPS outside `localhost`. Private browsing modes and browser storage quotas can limit persistence. Very large browser-side projects remain subject to the user's available memory and origin storage quota.
 
+The optional local assistant additionally needs a working WebGPU adapter in
+both the page and its dedicated worker. Try a current Chrome or Edge release
+with hardware acceleration enabled, and check the device and driver if no
+adapter is available. Unsupported local inference does not disable the R IDE.
+
 ## Third-party services and privacy
 
 R execution and ordinary project storage happen locally in the browser. Network requests are made for the pinned runtime and UI dependencies, webR package binaries, optional Google-hosted coding fonts, explicit GitHub Gist operations, and explicit Mistral Chat links. No analytics are included.
+
+Choosing **Load model** additionally downloads WebLLM and model assets from
+jsDelivr, Hugging Face and its download hosts, and MLC's GitHub-hosted model
+libraries. These ordinary browser requests do not use the R-only networking
+routes below. Assistant prompts and bounded R context are used in the local
+worker, with no remote inference API. Assistant conversation is not persisted
+or included in project exports; code explicitly inserted or run follows the
+IDE's normal saving behaviour. See [ASSISTANT.md](ASSISTANT.md).
 
 Choosing Connect additionally starts Tailscale coordination and encrypted relay connections. Only downloads using the webR download primitive are routed through the selected tailnet or exit node; the rest of the IDE's browser requests keep their existing routes. Tailscale credentials stay in the dedicated worker's memory, separate from workspace exports, URL sharing, Gists, and IndexedDB. A failed Tailscale download is reported as an error; it is never retried through an unrequested direct-browser route. HTTPS certificate verification remains enabled in the bundled networking runtime.
 
@@ -406,6 +468,10 @@ credentials. Target-site authentication and access rules still apply.
 │   ├── editor.js              # Editor, completion, folding, linting, navigation
 │   ├── console.js             # Multiline console, history, structured output
 │   ├── webr-engine.js         # webR lifecycle, R helpers, plots, data, packages
+│   ├── assistant.js           # Lazy local-assistant pane and explicit actions
+│   ├── assistant-context.js   # Prompt bounds and guarded code insertion
+│   ├── assistant-client.js    # Worker lifecycle, pinned models, cancellation
+│   ├── assistant-worker.js    # Lazy WebLLM loading and local GPU inference
 │   ├── network.js             # Explicit browser, Tailscale, and Worker routing
 │   ├── cloudflare-proxy.js    # Worker protocol and in-memory proxy credential
 │   ├── network-ui.js          # Networking dialog and status
@@ -427,6 +493,7 @@ credentials. Target-site authentication and access rules still apply.
 ├── network-src/                # Retained networking source and provenance
 ├── scripts/build-tailscale.mjs # Optional reproducible runtime rebuild
 ├── NETWORKING.md               # Setup, implementation, and troubleshooting
+├── ASSISTANT.md                # Local AI usage, bounds, privacy, and validation
 └── .github/workflows/pages.yml
 ```
 
@@ -448,3 +515,17 @@ inform the setup and redirect handling. The bundled Worker implementation is
 part of this project's MIT-licensed source and has no third-party code dependency.
 
 The existing IDE also depends on [webR](https://github.com/r-wasm/webr), [R](https://www.r-project.org/), [Ace](https://github.com/ajaxorg/ace), [Marked](https://github.com/markedjs/marked), [KaTeX](https://github.com/KaTeX/KaTeX), and [DOMPurify](https://github.com/cure53/DOMPurify). These projects are loaded from the pinned upstream distributions and retain their respective licences and acknowledgments. The visual conventions draw on [shadcn/ui](https://ui.shadcn.com/); the interface is implemented locally. Optional fonts are supplied by Google Fonts under each font's own licence. [Playwright](https://github.com/microsoft/playwright) is an optional development-only browser test dependency.
+
+The optional local assistant adds the following upstream components:
+
+| Component and contributors | Licence | Use |
+| --- | --- | --- |
+| [WebLLM 0.2.87, MLC AI and contributors](https://github.com/mlc-ai/web-llm/tree/v0.2.87) | [Apache-2.0](https://github.com/mlc-ai/web-llm/blob/v0.2.87/LICENSE) | Browser inference engine, worker APIs, compatible model catalog, and MLC model conversions |
+| [Qwen2.5-Coder-0.5B-Instruct, Qwen team](https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct) | [Apache-2.0](https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct/blob/main/LICENSE) | Lighter coding model, loaded as its MLC q4f32 conversion |
+| [Qwen2.5-Coder-1.5B-Instruct, Qwen team](https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct) | [Apache-2.0](https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct/blob/main/LICENSE) | Larger optional coding model, loaded as its MLC q4f32 conversion |
+
+WebLLM's bundled dependencies retain their upstream licences and notices. Model
+weights are fetched on demand and are not bundled in this repository. The
+project's MIT licence covers its integration code and does not replace these
+upstream licences. Exact model identifiers and primary documentation are in
+[ASSISTANT.md](ASSISTANT.md).

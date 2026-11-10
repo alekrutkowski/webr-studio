@@ -1,6 +1,6 @@
 import {
   NETWORK_TIMEOUT_MS, CLOUDFLARE_HEALTH_TIMEOUT_MS, validateProxyUrl, validateProxyToken
-} from './network-common.js?v=1.5.4';
+} from './network-common.js?v=1.6.0';
 
 const PROTOCOL = '1';
 const SERVICE = 'webr-studio-cors-proxy';

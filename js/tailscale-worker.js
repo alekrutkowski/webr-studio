@@ -1,5 +1,5 @@
 // Isolate the Go runtime so Disconnect really closes sockets and erases keys.
-import { validateDownloadUrl, validateDNSMode, normalizeNetworkHeaders, normalizeNetworkSnapshot } from './network-common.js?v=1.5.4';
+import { validateDownloadUrl, validateDNSMode, normalizeNetworkHeaders, normalizeNetworkSnapshot } from './network-common.js?v=1.6.0';
 
 let network = null;
 let connected = false;
@@ -18,7 +18,7 @@ async function connect() {
   if (connected) return snapshot();
   // This pinned, locally shipped build uses official Tailscale source. No
   // general browser fetch proxy or public CORS proxy is involved.
-  ({ network } = await import('../vendor/tailscale-web/tailscale-web.es.js?v=1.5.4'));
+  ({ network } = await import('../vendor/tailscale-web/tailscale-web.es.js?v=1.6.0'));
   self.postMessage({ event: 'progress', message: 'Starting Tailscale and requesting a sign-in link…' });
   const state = new Map();
   await network.init({

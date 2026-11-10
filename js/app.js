@@ -1,23 +1,23 @@
 import {
   APP_VERSION, DEFAULT_SETTINGS, MAX_EDITOR_BYTES, MAX_FILE_BYTES,
   MAX_URL_STATE_CHARS, SAMPLE_FILES, WEBR_VERSION_SUGGESTIONS, normalizeWebRVersion
-} from './config.js?v=1.5.4';
-import { workspaceDB } from './db.js?v=1.5.4';
+} from './config.js?v=1.6.0';
+import { workspaceDB } from './db.js?v=1.6.0';
 import {
   WebREngine, describeRuntime, environmentTypeLabel, explicitVirtualPath, normalizeVirtualPath,
   projectRelativePath, stripTerminalControlSequences
-} from './webr-engine.js?v=1.5.4';
-import { EditorManager } from './editor.js?v=1.5.4';
-import { ConsoleManager } from './console.js?v=1.5.4';
-import { DataViewer } from './data-viewer.js?v=1.5.4';
-import { createGist, importGist } from './gist.js?v=1.5.4';
-import { UI } from './ui.js?v=1.5.4';
-import { TailscaleNetwork } from './network.js?v=1.5.4';
-import { NetworkBridge } from './network-bridge.js?v=1.5.4';
-import { NetworkUI } from './network-ui.js?v=1.5.4';
+} from './webr-engine.js?v=1.6.0';
+import { EditorManager } from './editor.js?v=1.6.0';
+import { ConsoleManager } from './console.js?v=1.6.0';
+import { DataViewer } from './data-viewer.js?v=1.6.0';
+import { createGist, importGist } from './gist.js?v=1.6.0';
+import { UI } from './ui.js?v=1.6.0';
+import { TailscaleNetwork } from './network.js?v=1.6.0';
+import { NetworkBridge } from './network-bridge.js?v=1.6.0';
+import { NetworkUI } from './network-ui.js?v=1.6.0';
 import {
   evaluateInlineRMarkdown, gfmBundleFiles, gfmDocumentStem, RMarkdownGfmBuilder
-} from './rmd-gfm.js?v=1.5.4';
+} from './rmd-gfm.js?v=1.6.0';
 import {
   $, $$, basename, base64UrlToBytes, bytesToBase64Url, clamp, copyText, createZip,
   debounce, decodeFileText, decodeWorkspaceState, dirname, downloadBlob, downloadText,
@@ -26,7 +26,7 @@ import {
   makeUniqueName, mimeFromPath, mistralCodeUrl, normalizePath, rasterizeSvg,
   readFileAsBytes, renderMarkdown, renderMathInElement, safeOpen, sanitizeHtml,
   resolveRMarkdownFigureOptions, sanitizeSvg, splitRMarkdown, textEncodingFromBOM, uid
-} from './utils.js?v=1.5.4';
+} from './utils.js?v=1.6.0';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -203,6 +203,8 @@ class WebRStudioApp {
     this.editor = null;
     this.console = null;
     this.dataViewer = null;
+    this.assistant = null;
+    this.assistantPromise = null;
     this.runtimeAvailable = false;
     this.initialized = false;
     this.currentFocus = 'editor';
@@ -352,6 +354,7 @@ class WebRStudioApp {
         onDiagnostics: diagnostics => { this.diagnostics = diagnostics.map(item => ({ ...item, path: this.activePath })); this.renderProblems(); },
         onRunSelection: code => this.executeCode(code, { echo: true }),
         onRunScript: () => this.sourceActiveFile({ echo: false }),
+        onSuggest: () => this.showAssistant({ suggest: true, target: 'editor' }),
         onHelp: topic => this.openHelp(topic),
         onSave: path => this.saveFile(path),
         onOpenFile: (path, position) => this.openFile(path, position),
@@ -377,6 +380,7 @@ class WebRStudioApp {
       settings: this.settings,
       callbacks: {
         onSubmit: code => this.executeCode(code, { echo: false }),
+        onSuggest: () => this.showAssistant({ suggest: true, target: 'console' }),
         onHistoryChange: history => {
           this.consoleState.history = history;
           if (!this.erasingLocalData) this.persistWorkspaceDebounced();
@@ -549,6 +553,8 @@ class WebRStudioApp {
       this.applyWebRVersion();
     });
     on('#check-code-button', 'click', () => this.checkCodeWithMistral());
+    on('#assistant-editor-suggest', 'click', () => this.showAssistant({ suggest: true, target: 'editor' }));
+    on('#assistant-console-suggest', 'click', () => this.showAssistant({ suggest: true, target: 'console' }));
     on('#timing-button', 'click', () => this.updateSetting('timing', !this.settings.timing));
     on('#theme-button', 'click', () => this.cycleTheme());
     on('#settings-button', 'click', () => this.openSettings());
@@ -681,6 +687,7 @@ class WebRStudioApp {
     });
     this.engine.addEventListener('state', event => {
       const state = event.detail.state;
+      this.assistant?.onRuntimeState(event.detail);
       if (state === 'running') {
         this.projectRuntimeRevision += 1;
         if (this.projectPersistenceReady) this.projectPersistencePending = true;
@@ -729,6 +736,8 @@ class WebRStudioApp {
         { label: 'Smart indent', icon: 'i-code', shortcut: 'Ctrl I', action: () => this.editor.smartIndent() }
       ],
       code: [
+        { label: 'Local R assistant', icon: 'i-sparkles', action: () => this.showAssistant() },
+        { label: 'Suggest code locally', icon: 'i-sparkles', shortcut: 'Alt \\', action: () => this.showAssistant({ suggest: true, target: this.currentFocus }) },
         { label: 'Run selected', icon: 'i-play', shortcut: 'Ctrl Enter', action: () => this.executeCode(this.editor.getRunText(), { echo: true }) },
         { label: 'Source active script', icon: 'i-play', shortcut: 'Ctrl Shift Enter', action: () => this.sourceActiveFile({ echo: false }) },
         { label: 'Source with Echo', icon: 'i-terminal', action: () => this.sourceActiveFile({ echo: true }) },
@@ -751,6 +760,7 @@ class WebRStudioApp {
         { label: 'Measure execution time', icon: 'i-clock', checked: this.settings.timing, action: () => this.updateSetting('timing', !this.settings.timing) }
       ],
       view: [
+        { label: 'Local R assistant', icon: 'i-sparkles', action: () => this.showAssistant() },
         { label: 'Command palette', icon: 'i-command', shortcut: 'Ctrl Shift P', action: () => this.openCommandPalette() },
         { label: 'Explorer', icon: 'i-file', action: () => this.activateSidebar('explorer') },
         { label: 'Environment', icon: 'i-box', action: () => this.activatePanel('environment') },
@@ -776,6 +786,14 @@ class WebRStudioApp {
 
   handleGlobalKeydown(event) {
     const key = event.key.toLowerCase();
+    if (!event.defaultPrevented && event.altKey && !event.ctrlKey && !event.metaKey && key === '\\'
+        && event.target.closest?.('#editor, #console-input, #fallback-editor, #fallback-console')) {
+      event.preventDefault();
+      const target = event.target.closest('#console-input, #fallback-console') ? 'console' : 'editor';
+      this.currentFocus = target;
+      this.showAssistant({ suggest: true, target });
+      return;
+    }
     if (event.ctrlKey && event.shiftKey && key === 'p') {
       event.preventDefault();
       this.openCommandPalette();
@@ -1887,6 +1905,7 @@ class WebRStudioApp {
   }
 
   async finalizeExecution(result) {
+    this.assistant?.recordExecution(result);
     await this.handleViewOutputs(result);
     await this.console.appendExecution(result, {
       showTiming: this.settings.timing,
@@ -2186,6 +2205,7 @@ class WebRStudioApp {
     $('#apply-webr-version').disabled = state === 'loading' || state === 'running';
     $('#webr-version-input').disabled = state === 'loading' || state === 'running';
     this.renderRuntimeFiles();
+    this.assistant?.updateState();
   }
 
   async showRuntimeInfo() {
@@ -2243,6 +2263,7 @@ class WebRStudioApp {
     try {
       this.environment = await this.engine.getEnvironment();
       this.environmentError = '';
+      this.assistant?.refreshObjectChoices();
       this.renderEnvironment();
     } catch (error) {
       if (retry && this.engine.ready && !this.engine.running) {
@@ -3417,6 +3438,9 @@ class WebRStudioApp {
     $$('.dock-tabs .tab', pane).forEach(button => button.classList.toggle('active', button.dataset.panel === name));
     this.settings.activeDock[dock] = name;
     if (persist) this.persistSettingsDebounced();
+    if (name === 'assistant') this.ensureAssistant().then(panel => { panel.refreshObjectChoices(); panel.updateState(); }).catch(error => {
+      $('#assistant-status').textContent = `The assistant could not open: ${error.message}`;
+    });
     if (name === 'environment') this.refreshEnvironment();
     if (name === 'packages') this.refreshPackages();
     if (name === 'plots') {
@@ -3600,6 +3624,7 @@ class WebRStudioApp {
     const file = this.resolveActiveFile();
     this.ui.showMenu(anchor, [
       { type: 'label', label: 'Editor actions' },
+      { label: 'Suggest R code locally', icon: 'i-sparkles', shortcut: 'Alt \\', disabled: !file, action: () => this.showAssistant({ suggest: true, target: 'editor' }) },
       { label: this.maximizedPaneId === 'editor-pane' ? 'Restore editor pane' : 'Maximize editor pane', icon: this.maximizedPaneId === 'editor-pane' ? 'i-restore' : 'i-maximize', action: () => this.togglePaneMaximize('editor-pane') },
       { label: 'Run selected', icon: 'i-play', shortcut: 'Ctrl Enter', disabled: !file || !this.engine.ready, action: () => this.executeCode(this.editor.getRunText(), { echo: true }) },
       { label: 'Source active script', icon: 'i-play', shortcut: 'Ctrl Shift Enter', disabled: !file || extname(file.path) !== 'r' || !this.engine.ready, action: () => this.sourceActiveFile({ echo: false }) },
@@ -3619,6 +3644,7 @@ class WebRStudioApp {
   showDockOptionsMenu(anchor, dock) {
     const labels = {
       environment: 'Environment', outline: 'Outline', packages: 'Packages',
+      assistant: 'Local R assistant',
       plots: 'Plots', help: 'Help', data: 'Data viewer', preview: 'Document preview'
     };
     const active = this.settings.activeDock[dock] || this.settings.dockPanels[dock]?.[0];
@@ -3817,6 +3843,8 @@ class WebRStudioApp {
           this.plotResizeDebounced, this.projectBackupDebounced
         ]) task?.cancel?.();
         this.console?.resetAll();
+        this.assistant?.clear();
+        this.assistant?.unload();
         this.consoleState = { history: [], transcript: [], draft: '' };
         this.files.clear();
         this.openTabs = [];
@@ -3944,6 +3972,8 @@ class WebRStudioApp {
 
   buildCommandItems() {
     this.commandItems = [
+      { title: 'Local R assistant', detail: 'Local AI with R object context', icon: 'i-sparkles', action: () => this.showAssistant() },
+      { title: 'Suggest R code locally', detail: 'Editor or console', icon: 'i-sparkles', shortcut: 'Alt \\', action: () => this.showAssistant({ suggest: true, target: this.currentFocus }) },
       { title: 'New Rmd file', detail: 'File', icon: 'i-book', action: () => this.createRMarkdownFile() },
       { title: 'New R script', detail: 'File', icon: 'i-plus', shortcut: 'Ctrl Alt N', action: () => this.createFile() },
       { title: 'Upload files', detail: 'File', icon: 'i-upload', shortcut: 'Ctrl Alt O', action: () => $('#file-input').click() },
@@ -4148,6 +4178,32 @@ class WebRStudioApp {
     }));
   }
 
+  async ensureAssistant() {
+    if (this.assistant && !this.assistant.disposed) return this.assistant;
+    if (!this.assistantPromise) {
+      // Opening the pane loads only small UI modules, never the model or WebLLM.
+      this.assistantPromise = import('./assistant.js?v=1.6.0').then(({ AssistantPanel }) => {
+        this.assistant = new AssistantPanel(this);
+        return this.assistant;
+      }).finally(() => { this.assistantPromise = null; });
+    }
+    return this.assistantPromise;
+  }
+
+  async showAssistant({ suggest = false, target = this.currentFocus } = {}) {
+    try {
+      if (this.maximizedPaneId && this.maximizedPaneId !== $('#panel-assistant').closest('.dock-pane')?.id) this.restoreMaximizedPane();
+      this.activatePanel('assistant');
+      const assistant = await this.ensureAssistant();
+      assistant.refreshObjectChoices();
+      assistant.updateState();
+      if (suggest) await assistant.suggest(target);
+      else $('#assistant-prompt').focus();
+    } catch (error) {
+      this.ui.toast('Local R assistant', error.message || String(error), 'error');
+    }
+  }
+
   checkCodeWithMistral() {
     const code = this.editor.getSelection().trim() || this.editor.getRunText().trim();
     if (!code) return this.ui.toast('No R code selected', 'Highlight code or place the cursor in an expression first.', 'info');
@@ -4313,6 +4369,7 @@ class WebRStudioApp {
           deletedPaths: [...this.files.keys()].filter(path => !newFiles.has(path)), directories });
       }
       replacementCommitted = true;
+      this.assistant?.clear();
       this.fileSaveQueues.clear();
       this.deletingFiles.clear();
       this.pendingMirrors.clear();

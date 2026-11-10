@@ -421,6 +421,33 @@ body.resizing-horizontal { user-select: none; cursor: row-resize; }
 .dock-content { position: relative; min-height: 0; flex: 1; overflow: hidden; }
 .panel-view { position: absolute; inset: 0; display: none; flex-direction: column; min-height: 0; overflow: hidden; background: var(--surface); }
 .panel-view.active { display: flex; }
+.assistant-panel { font-size: 12px; }
+.assistant-scroll { flex: 1; min-height: 70px; overflow: auto; padding: 10px; overscroll-behavior: contain; }
+.assistant-settings { margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-muted); }
+.assistant-settings summary { display: flex; align-items: center; justify-content: space-between; gap: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.assistant-settings summary::before { content: '›'; color: var(--text-muted); }
+.assistant-settings[open] summary::before { content: '⌄'; }
+.assistant-settings label:not(.checkbox-row) { display: block; margin: 7px 0 4px; font-size: 11px; font-weight: 600; }
+.assistant-settings select { width: 100%; min-width: 0; padding: 5px; font-size: 11px; }
+.assistant-settings .checkbox-row { align-items: flex-start; margin: 8px 0; font-size: 11px; }
+.assistant-settings .field-help { margin: 7px 0; line-height: 1.45; }
+.assistant-badge { padding: 2px 5px; border-radius: 4px; color: var(--primary); background: var(--primary-soft); font-size: 10px; }
+.assistant-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
+.assistant-actions .button { min-height: 25px; font-size: 11px; padding: 4px 7px; }
+.assistant-status { padding: 5px 0; margin: 0 0 5px; color: var(--text-muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.assistant-status[data-state="error"] { color: var(--danger); }
+.assistant-panel progress { width: 100%; height: 6px; margin: 2px 0 8px; accent-color: var(--primary); }
+.assistant-empty, .assistant-note { color: var(--text-muted); font-size: 11px; line-height: 1.55; }
+.assistant-message { margin: 10px 0; padding: 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.assistant-message.assistant-user { border-color: transparent; background: var(--surface-muted); }
+.assistant-role { display: block; margin-bottom: 5px; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.assistant-message-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+.assistant-code, .assistant-context-preview { max-width: 100%; margin: 7px 0; padding: 8px; background: var(--surface-muted); border: 1px solid var(--border); border-radius: 4px; overflow: auto; white-space: pre; font: 12px/1.5 var(--code-font); tab-size: 2; }
+.assistant-context-preview { max-height: 220px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.assistant-composer { flex: 0 0 auto; padding: 9px 10px; border-top: 1px solid var(--border); background: var(--surface); }
+.assistant-composer textarea { width: 100%; min-height: 45px; max-height: 180px; resize: vertical; padding: 7px; font: 12px/1.45 var(--ui-font); }
+.assistant-composer .field-help { display: block; margin-top: 5px; font-size: 10px; }
+.assistant-composer .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .panel-toolbar, .plot-toolbar, .help-toolbar, .preview-toolbar { min-height: 38px; display: flex; align-items: center; gap: 5px; padding: 4px 7px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .panel-toolbar .input-with-icon { flex: 1; }
 .environment-table, .packages-table, .outline-list { min-height: 0; flex: 1; overflow: auto; }
