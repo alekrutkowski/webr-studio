@@ -22,7 +22,7 @@ Made with GPT-5.6-Sol-Pro and its successors.
 - Interactive R prompts accept plain-text replies in the console, including menu choices and empty responses, with Stop available while waiting.
 - Project-aware completion candidates from open files, the global environment, loaded packages, namespace expressions, and list or data-frame members.
 - Optional local R assistant with WebLLM, streamed chat, bounded access to R objects, and explicit <kbd>Alt</kbd>+<kbd>\\</kbd> code suggestions in the editor and console. Model loading starts only when requested.
-- Smart indentation, <kbd>Ctrl</kbd>+<kbd>I</kbd> formatting, advanced find and replace, undo and redo buttons, <kbd>Ctrl</kbd>+<kbd>Z</kbd> and <kbd>Ctrl</kbd>+<kbd>Y</kbd>, jump to definition with <kbd><kbd>F1</kbd>2</kbd>, and help for the symbol under the cursor with <kbd>F1</kbd>.
+- Smart indentation, <kbd>Ctrl</kbd>+<kbd>I</kbd> formatting, advanced find and replace, undo and redo buttons, <kbd>Ctrl</kbd>+<kbd>Z</kbd> and <kbd>Ctrl</kbd>+<kbd>Y</kbd>, jump to definition with <kbd>F12</kbd>, and help for the symbol under the cursor with <kbd>F1</kbd>.
 - <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> inserts either the native `|>` pipe or `%>%`, according to the saved preference.
 - Run selection or current expression with <kbd>Ctrl</kbd>+<kbd>Enter</kbd>, source the complete script with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd>, stop execution, restart webR, and optional execution timing.
 - Diagnostics combine the live R parser with quick static checks and suggested one-click fixes.
