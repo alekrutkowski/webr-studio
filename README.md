@@ -6,7 +6,7 @@ A fast, browser-native R IDE for [webR](https://docs.r-wasm.org/webr/latest/), d
 
 The interface follows the visual system and interaction conventions popularised by [shadcn/ui](https://ui.shadcn.com/): neutral design tokens, compact toolbars, consistent controls, accessible focus states, restrained elevation, and first-class light and dark themes. It is implemented as a dependency-light static application rather than a generated React bundle, which keeps startup and GitHub Pages deployment simple.
 
-Made with GPT-5.6-Sol-Pro.
+Made with GPT-5.6-Sol-Pro and its successors.
 
 <img width="3204" height="2167" alt="image" src="https://github.com/user-attachments/assets/8e03bfbe-fdcc-422a-be4a-ace393eec91f" />
 
@@ -21,10 +21,10 @@ Made with GPT-5.6-Sol-Pro.
 - Multiline console expressions with continuation prompts and multiline command history.
 - Interactive R prompts accept plain-text replies in the console, including menu choices and empty responses, with Stop available while waiting.
 - Project-aware completion candidates from open files, the global environment, loaded packages, namespace expressions, and list or data-frame members.
-- Optional local R assistant with WebLLM, streamed chat, bounded access to R objects, and explicit **Alt+\** code suggestions in the editor and console. Model loading starts only when requested.
-- Smart indentation, Ctrl+I formatting, advanced find and replace, undo and redo buttons, Ctrl+Z and Ctrl+Y, jump to definition with F12, and help for the symbol under the cursor with F1.
-- Ctrl+Shift+M inserts either the native `|>` pipe or `%>%`, according to the saved preference.
-- Run selection or current expression with Ctrl+Enter, source the complete script with Ctrl+Shift+Enter, stop execution, restart webR, and optional execution timing.
+- Optional local R assistant with WebLLM, streamed chat, bounded access to R objects, and explicit <kbd>Alt</kbd>+<kbd>\\</kbd> code suggestions in the editor and console. Model loading starts only when requested.
+- Smart indentation, <kbd>Ctrl</kbd>+<kbd>I</kbd> formatting, advanced find and replace, undo and redo buttons, <kbd>Ctrl</kbd>+<kbd>Z</kbd> and <kbd>Ctrl</kbd>+<kbd>Y</kbd>, jump to definition with <kbd><kbd>F1</kbd>2</kbd>, and help for the symbol under the cursor with <kbd>F1</kbd>.
+- <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> inserts either the native `|>` pipe or `%>%`, according to the saved preference.
+- Run selection or current expression with <kbd>Ctrl</kbd>+<kbd>Enter</kbd>, source the complete script with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd>, stop execution, restart webR, and optional execution timing.
 - Diagnostics combine the live R parser with quick static checks and suggested one-click fixes.
 
 ### R session tools
@@ -36,7 +36,7 @@ Made with GPT-5.6-Sol-Pro.
 - Ordinary `install.packages()` calls in the console or scripts use the same WebAssembly package installer as the Packages pane.
 - Automatic `.RData` checkpoints, manual `.RData` import and export, session restart without closing the tab, and optional environment restoration on startup.
 - SVG-first plot capture and display, plot history, and export as SVG, PNG, JPEG, or WebP.
-- Pretty HTML R help, searchable inside the IDE, with F1 lookup and back or forward navigation.
+- Pretty HTML R help, searchable inside the IDE, with <kbd>F1</kbd> lookup and back or forward navigation.
 
 ### Projects, data, and documents
 
@@ -285,7 +285,7 @@ supports that warning. Browser storage belongs to this site and browser profile;
 export a project ZIP for a separate copy.
 
 - Click a file's trash icon, choose **Delete** from its actions menu, or select
-  files with Ctrl/Cmd-click and use **Delete selected**. Confirming removes the
+  files with <kbd>Ctrl</kbd>/Cmd-click and use **Delete selected**. Confirming removes the
   files from the R filesystem and any saved project copies, and closes their
   editor tabs. Deletion waits for pending saves and is disabled while R runs.
 - **Open** uses the editor for valid UTF-8 text, regardless of its extension.
